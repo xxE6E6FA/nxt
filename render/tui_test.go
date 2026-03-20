@@ -167,6 +167,30 @@ func TestFetchResultTransition(t *testing.T) {
 	}
 }
 
+func TestFetchResultClampsCursor(t *testing.T) {
+	// Simulate: cursor at 8, refresh returns only 4 items
+	m := testModel(make([]model.WorkItem, 10))
+	m.cursor = 8
+
+	newItems := sampleItems() // 3 items
+	m = updateModel(m, FetchResult{Items: newItems})
+
+	if m.cursor != 2 {
+		t.Errorf("cursor = %d, want 2 (clamped to last item)", m.cursor)
+	}
+}
+
+func TestFetchResultClampsCursorToZero(t *testing.T) {
+	m := testModel(sampleItems())
+	m.cursor = 2
+
+	m = updateModel(m, FetchResult{Items: nil})
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (empty items)", m.cursor)
+	}
+}
+
 func TestViewContainsItems(t *testing.T) {
 	m := testModel(sampleItems())
 	view := m.View()

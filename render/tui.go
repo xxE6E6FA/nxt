@@ -239,6 +239,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.warnings = msg.Warnings
 		m.fetchedAt = time.Now()
 		m.refreshing = false
+		// Clamp cursor if items shrunk (e.g. after refresh)
+		if m.cursor >= len(m.items) && len(m.items) > 0 {
+			m.cursor = len(m.items) - 1
+		} else if len(m.items) == 0 {
+			m.cursor = 0
+		}
 		return m, nil
 
 	case refreshTickMsg:
