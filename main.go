@@ -47,7 +47,9 @@ func main() {
 	}
 
 	// Build the fetch function used by both interactive and non-interactive paths.
-	fetchData := func(updateSource func(string, render.SourceStatus)) render.FetchResult {
+	fetchData := func(updateSource func(string, render.SourceStatus), noCache bool) render.FetchResult {
+		skipCache := flags.NoCache || noCache
+
 		var (
 			issues      []model.LinearIssue
 			prs         []model.PullRequest
@@ -69,7 +71,7 @@ func main() {
 
 		g.Go(func() error {
 			notifySource(updateSource, "Linear", render.StatusLoading)
-			if !flags.NoCache {
+			if !skipCache {
 				if served := serveCached("linear", &issues, cache.LinearTTL, updateSource, "Linear", func() {
 					fetched, fetchErr := source.FetchLinearIssues(cfg.Linear.APIKey)
 					if fetchErr == nil {
@@ -97,7 +99,7 @@ func main() {
 				notifySource(updateSource, "Worktrees", render.StatusDone)
 				return nil
 			}
-			if !flags.NoCache {
+			if !skipCache {
 				if served := serveCached("worktrees", &scanRes, cache.WorktreesTTL, updateSource, "Worktrees", func() {
 					fetched, fetchErr := source.ScanWorktrees(cfg.Local.BaseDirs)
 					if fetchErr == nil {
@@ -121,7 +123,7 @@ func main() {
 
 		// Check GitHub cache — stale-while-revalidate aware
 		var githubCacheState int // 0=miss, 1=fresh, 2=stale
-		if !flags.NoCache {
+		if !skipCache {
 			hit, stale := cache.GetStale("github", &prs, cache.GitHubTTL, cache.StaleTTL)
 			if hit && !stale {
 				githubCacheState = 1
@@ -185,7 +187,7 @@ func main() {
 	}
 
 	// Non-interactive: fetch synchronously, then output
-	result := fetchData(nil)
+	result := fetchData(nil, false)
 
 	// Debug
 	if flags.Debug {

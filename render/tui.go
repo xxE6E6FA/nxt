@@ -39,7 +39,8 @@ type SourceUpdate struct {
 }
 
 // FetchFunc is the function signature for fetching work items.
-type FetchFunc func(updateSource func(name string, status SourceStatus)) FetchResult
+// When noCache is true, all sources are fetched fresh (bypassing cache).
+type FetchFunc func(updateSource func(name string, status SourceStatus), noCache bool) FetchResult
 
 // execDoneMsg is sent when an exec'd process finishes.
 type execDoneMsg struct{ err error }
@@ -74,7 +75,7 @@ type tuiModel struct {
 
 	// Fetch
 	fetchFunc FetchFunc
-	program   *tea.Program
+	program   **tea.Program // double pointer so the model copy inside tea.Program sees the assignment
 
 	// Settings sub-model
 	settings settingsModel
@@ -99,6 +100,8 @@ type spinTickMsg struct{}
 func RunInteractive(cfg *config.Config, editor string, fetchFunc FetchFunc) Action {
 	interval := refreshIntervalFromConfig(cfg)
 
+	var pp *tea.Program
+
 	m := tuiModel{
 		phase:           phaseLoading,
 		editor:          editor,
@@ -106,15 +109,16 @@ func RunInteractive(cfg *config.Config, editor string, fetchFunc FetchFunc) Acti
 		fetchFunc:       fetchFunc,
 		refreshInterval: interval,
 		sources:         defaultSources(),
+		program:         &pp,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	m.program = p
+	pp = p
 
 	go func() {
 		result := fetchFunc(func(name string, status SourceStatus) {
 			p.Send(SourceUpdate{Name: name, Status: status})
-		})
+		}, false)
 		p.Send(prepareFetchResult(result, cfg.Display.MaxItems))
 	}()
 
@@ -178,16 +182,16 @@ func (m tuiModel) triggerRefresh() (tuiModel, tea.Cmd) {
 	}
 	m.refreshing = true
 
-	prog := m.program
+	progPtr := m.program
 	fetchFn := m.fetchFunc
 	maxItems := m.cfg.Display.MaxItems
 
 	cmd := func() tea.Msg {
 		result := fetchFn(func(name string, status SourceStatus) {
-			if prog != nil {
-				prog.Send(SourceUpdate{Name: name, Status: status})
+			if progPtr != nil && *progPtr != nil {
+				(*progPtr).Send(SourceUpdate{Name: name, Status: status})
 			}
-		})
+		}, true) // noCache=true for refresh
 		return prepareFetchResult(result, maxItems)
 	}
 
