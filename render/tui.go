@@ -64,6 +64,7 @@ type tuiModel struct {
 	width      int
 	height     int
 	action     Action
+	lastAction Action // records the most recent action decided by handleKey (for testability)
 	warnings   []string
 	fetchedAt  time.Time
 	refreshing bool // true while a background refresh is in progress
@@ -315,6 +316,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyEnter, "e":
 		// Open worktree in configured editor
 		if path := wtPath(item); path != "" {
+			m.lastAction = Action{Kind: "editor", Path: path}
 			c := exec.Command(m.editor, path) //nolint:gosec // editor command is from user config
 			return m, tea.ExecProcess(c, func(err error) tea.Msg {
 				return execDoneMsg{err}
@@ -324,6 +326,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		// Open Claude in worktree with issue context (blocks until claude exits)
 		if path := wtPath(item); path != "" {
+			m.lastAction = Action{Kind: "claude", Path: path}
 			prompt := buildClaudePrompt(item)
 			var c *exec.Cmd
 			if prompt != "" {
@@ -339,11 +342,13 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "l":
 		if item.Issue != nil && item.Issue.URL != "" {
+			m.lastAction = Action{Kind: "open-linear", Path: item.Issue.URL}
 			openBrowser(item.Issue.URL)
 		}
 
 	case "g":
 		if item.PR != nil && item.PR.URL != "" {
+			m.lastAction = Action{Kind: "open-github", Path: item.PR.URL}
 			openBrowser(item.PR.URL)
 		}
 
