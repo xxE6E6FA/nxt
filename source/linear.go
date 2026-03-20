@@ -32,6 +32,11 @@ const issuesQuery = `{
         dueDate
         state { name }
         cycle { id }
+        attachments(filter: { sourceType: { eq: "github" } }) {
+          nodes {
+            url
+          }
+        }
       }
     }
   }
@@ -55,6 +60,11 @@ type linearResponse struct {
 					Cycle *struct {
 						ID string `json:"id"`
 					} `json:"cycle"`
+					Attachments struct {
+						Nodes []struct {
+							URL string `json:"url"`
+						} `json:"nodes"`
+					} `json:"attachments"`
 				} `json:"nodes"`
 			} `json:"assignedIssues"`
 		} `json:"viewer"`
@@ -122,6 +132,11 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 		if n.Cycle != nil {
 			issue.CycleID = n.Cycle.ID
 			issue.InCycle = true
+		}
+		for _, att := range n.Attachments.Nodes {
+			if att.URL != "" {
+				issue.PRURLs = append(issue.PRURLs, att.URL)
+			}
 		}
 		issues = append(issues, issue)
 	}

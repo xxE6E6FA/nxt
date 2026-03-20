@@ -14,6 +14,7 @@ type LinearIssue struct {
 	CycleID    string    `json:"cycleId,omitempty"`
 	InCycle    bool      `json:"inCycle"`
 	URL        string    `json:"url"`
+	PRURLs     []string  `json:"prUrls,omitempty"` // GitHub PR URLs from Linear attachments
 }
 
 // PullRequest represents a GitHub pull request.

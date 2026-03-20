@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/term"
 
 	"github.com/xxE6E6FA/nxt/cache"
 	"github.com/xxE6E6FA/nxt/cmd"
@@ -14,6 +16,7 @@ import (
 	"github.com/xxE6E6FA/nxt/model"
 	"github.com/xxE6E6FA/nxt/render"
 	"github.com/xxE6E6FA/nxt/scorer"
+	"github.com/xxE6E6FA/nxt/setup"
 	"github.com/xxE6E6FA/nxt/source"
 )
 
@@ -26,92 +29,160 @@ func main() {
 		os.Exit(1)
 	}
 
-	var (
-		issues    []model.LinearIssue
-		prs       []model.PullRequest
-		worktrees []model.Worktree
-		errors    []string
-	)
+	setup.EnsureSetup(cfg, flags.Setup)
 
-	g := new(errgroup.Group)
+	interactive := !flags.JSON && !flags.Debug && term.IsTerminal(int(os.Stdout.Fd()))
 
-	// Linear
-	g.Go(func() error {
-		if !flags.NoCache {
-			if cache.Get("linear", &issues) {
+	// Build the fetch function used by both interactive and non-interactive paths.
+	fetchData := func(updateSource func(string, render.SourceStatus)) render.FetchResult {
+		var (
+			issues    []model.LinearIssue
+			prs       []model.PullRequest
+			scanRes   source.ScanResult
+			warnings  []string
+		)
+
+		// Phase 1: Linear + worktrees in parallel
+		g := new(errgroup.Group)
+
+		g.Go(func() error {
+			if updateSource != nil {
+				updateSource("Linear", render.StatusLoading)
+			}
+			if !flags.NoCache {
+				if cache.Get("linear", &issues) {
+					if updateSource != nil {
+						updateSource("Linear", render.StatusCached)
+					}
+					return nil
+				}
+			}
+			var err error
+			issues, err = source.FetchLinearIssues(cfg.Linear.APIKey)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("linear: %v", err))
+				if updateSource != nil {
+					updateSource("Linear", render.StatusError)
+				}
 				return nil
 			}
-		}
-		var err error
-		issues, err = source.FetchLinearIssues(cfg.Linear.APIKey)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("linear: %v", err))
-			return nil // don't fail the group
-		}
-		_ = cache.Set("linear", issues)
-		return nil
-	})
-
-	// GitHub PRs
-	g.Go(func() error {
-		if len(cfg.GitHub.Repos) == 0 {
+			_ = cache.Set("linear", issues)
+			if updateSource != nil {
+				updateSource("Linear", render.StatusDone)
+			}
 			return nil
-		}
-		if !flags.NoCache {
-			if cache.Get("github", &prs) {
+		})
+
+		g.Go(func() error {
+			if updateSource != nil {
+				updateSource("Worktrees", render.StatusLoading)
+			}
+			if len(cfg.Local.BaseDirs) == 0 {
+				if updateSource != nil {
+					updateSource("Worktrees", render.StatusDone)
+				}
 				return nil
 			}
-		}
-		var err error
-		prs, err = source.FetchPullRequests(cfg.GitHub.Repos)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("github: %v", err))
-			return nil
-		}
-		_ = cache.Set("github", prs)
-		return nil
-	})
-
-	// Worktrees
-	g.Go(func() error {
-		if len(cfg.Local.BaseDirs) == 0 {
-			return nil
-		}
-		if !flags.NoCache {
-			if cache.Get("worktrees", &worktrees) {
+			if !flags.NoCache {
+				if cache.Get("worktrees", &scanRes) {
+					if updateSource != nil {
+						updateSource("Worktrees", render.StatusCached)
+					}
+					return nil
+				}
+			}
+			var err error
+			scanRes, err = source.ScanWorktrees(cfg.Local.BaseDirs)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("git: %v", err))
+				if updateSource != nil {
+					updateSource("Worktrees", render.StatusError)
+				}
 				return nil
 			}
-		}
-		var err error
-		worktrees, err = source.ScanWorktrees(cfg.Local.BaseDirs)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("git: %v", err))
+			_ = cache.Set("worktrees", scanRes)
+			if updateSource != nil {
+				updateSource("Worktrees", render.StatusDone)
+			}
 			return nil
+		})
+
+		_ = g.Wait()
+
+		// Phase 2: GitHub PRs
+		if updateSource != nil {
+			updateSource("GitHub", render.StatusLoading)
 		}
-		_ = cache.Set("worktrees", worktrees)
-		return nil
-	})
+		if !flags.NoCache && cache.Get("github", &prs) {
+			if updateSource != nil {
+				updateSource("GitHub", render.StatusCached)
+			}
+		} else {
+			var prURLs []string
+			for _, issue := range issues {
+				prURLs = append(prURLs, issue.PRURLs...)
+			}
+			var err error
+			prs, err = source.FetchPullRequests(prURLs)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("github: %v", err))
+				if updateSource != nil {
+					updateSource("GitHub", render.StatusError)
+				}
+			} else if updateSource != nil {
+				updateSource("GitHub", render.StatusDone)
+			}
+			_ = cache.Set("github", prs)
+		}
 
-	_ = g.Wait()
+		items := linker.Link(issues, prs, scanRes.Worktrees, scanRes.RepoMap)
+		scorer.Score(items)
 
-	// Print warnings for partial failures
-	for _, e := range errors {
-		fmt.Fprintf(os.Stderr, "  ⚠ %s\n", e)
+		return render.FetchResult{Items: items, Warnings: warnings}
 	}
 
-	// Link
-	items := linker.Link(issues, prs, worktrees)
-
-	// Score
-	scorer.Score(items)
-
-	// Output
-	if flags.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(items)
+	// Interactive TUI — alt-screen from the start, actions run inline
+	if interactive {
+		render.RunInteractive(cfg, cfg.EditorCommand(), fetchData)
 		return
 	}
 
-	render.Render(items, cfg.Display.MaxItems)
+	// Non-interactive: fetch synchronously, then output
+	result := fetchData(nil)
+
+	// Debug
+	if flags.Debug {
+		fmt.Fprintf(os.Stderr, "\n--- Debug ---\n")
+		for _, item := range result.Items {
+			if item.Issue != nil {
+				wt := "(no worktree)"
+				if item.Worktree != nil {
+					wt = item.Worktree.Path
+				}
+				pr := "(no PR)"
+				if item.PR != nil {
+					pr = fmt.Sprintf("PR #%d", item.PR.Number)
+				}
+				fmt.Fprintf(os.Stderr, "  %s  score=%d  branch=%q  %s  %s\n",
+					item.Issue.Identifier, item.Score, item.Issue.BranchName, pr, wt)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "---\n\n")
+	}
+
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "  ⚠ %s\n", w)
+	}
+
+	if flags.JSON {
+		sort.Slice(result.Items, func(i, j int) bool {
+			return result.Items[i].Score > result.Items[j].Score
+		})
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(result.Items)
+		return
+	}
+
+	render.Render(result.Items, cfg.Display.MaxItems)
 }

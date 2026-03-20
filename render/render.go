@@ -2,26 +2,36 @@ package render
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
+
 	"github.com/xxE6E6FA/nxt/model"
 )
 
-var (
-	red    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	green  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	bold   = lipgloss.NewStyle().Bold(true)
-	rank   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
-)
+// hyperlink wraps text in an OSC 8 terminal hyperlink.
+func hyperlink(url, text string) string {
+	if url == "" {
+		return text
+	}
+	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", url, text)
+}
 
-// Render outputs work items to stdout, sorted by score descending.
+func termWidth() int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w < 60 {
+		return 80
+	}
+	return w
+}
+
+// Render outputs work items to stdout (non-interactive / piped mode).
 func Render(items []model.WorkItem, maxItems int) {
-	// Sort by score descending
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].Score > items[j].Score
 	})
@@ -31,124 +41,104 @@ func Render(items []model.WorkItem, maxItems int) {
 	}
 
 	if len(items) == 0 {
-		fmt.Println(dim.Render("  No active work items found."))
+		fmt.Println(lipgloss.NewStyle().Foreground(colorStatus).Render("  No active work items found."))
 		return
 	}
 
+	width := termWidth()
 	fmt.Println()
+
 	for i, item := range items {
-		renderItem(i+1, item)
+		renderStaticItem(i+1, item, width)
 	}
 }
 
-func renderItem(idx int, item model.WorkItem) {
-	// Line 1: rank, identifier, title, score bar
-	idStr := ""
-	title := ""
-
-	if item.Issue != nil {
-		idStr = bold.Render(item.Issue.Identifier)
-		title = item.Issue.Title
-	} else if item.PR != nil {
-		idStr = bold.Render(fmt.Sprintf("PR #%d", item.PR.Number))
-		title = item.PR.Title
-		if item.PR.Repo != "" {
-			idStr = bold.Render(fmt.Sprintf("%s #%d", item.PR.Repo, item.PR.Number))
-		}
+func renderStaticItem(idx int, item model.WorkItem, width int) {
+	// Rank
+	rankLabel := fmt.Sprintf("%2d", idx)
+	var rankStr string
+	if item.Score >= 30 {
+		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgHigh).Render(rankLabel)
+	} else if item.Score >= 15 {
+		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgMed).Render(rankLabel)
+	} else {
+		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgLow).Render(rankLabel)
 	}
 
-	scoreBar := renderScoreBar(item.Score)
-	fmt.Printf(" %s  %s  %-50s %s\n",
-		rank.Render(fmt.Sprintf("#%d", idx)),
-		idStr,
-		truncate(title, 50),
-		scoreBar,
-	)
+	id, title, idURL := "", "", ""
+	if item.Issue != nil {
+		id = item.Issue.Identifier
+		idURL = item.Issue.URL
+		title = item.Issue.Title
+	} else if item.PR != nil {
+		if item.PR.Repo != "" {
+			id = fmt.Sprintf("%s #%d", item.PR.Repo, item.PR.Number)
+		} else {
+			id = fmt.Sprintf("PR #%d", item.PR.Number)
+		}
+		idURL = item.PR.URL
+		title = item.PR.Title
+	}
 
-	// Line 2: status, PR info, review state
+	idRendered := hyperlink(idURL, lipgloss.NewStyle().Bold(true).Foreground(colorIssueID).Render(id))
+	titleMax := width - 5 - len(id) - 4
+	if titleMax < 20 {
+		titleMax = 20
+	}
+
+	fmt.Printf(" %s %s  %s\n", rankStr, idRendered,
+		lipgloss.NewStyle().Foreground(colorTitle).Render(truncate(title, titleMax)))
+
+	dotStr := lipgloss.NewStyle().Foreground(colorDot).Render(" · ")
 	var parts []string
 
 	if item.Issue != nil {
-		parts = append(parts, item.Issue.Status)
+		parts = append(parts, lipgloss.NewStyle().Foreground(colorStatus).Render(item.Issue.Status))
 	}
-
 	if item.PR != nil {
-		prStr := fmt.Sprintf("● PR #%d", item.PR.Number)
-		if item.PR.IsDraft {
-			prStr = fmt.Sprintf("◌ PR #%d (draft)", item.PR.Number)
+		parts = append(parts, renderPRParts(item.PR)...)
+	}
+	if item.Worktree != nil && !item.Worktree.IsMain {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colorPath).Render(shortenPath(item.Worktree.Path)))
+		if !item.Worktree.LastCommit.IsZero() {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorTime).Render(humanDuration(time.Since(item.Worktree.LastCommit))))
 		}
-
-		// CI status
-		switch item.PR.CIStatus {
-		case "passing":
-			prStr += " " + green.Render("✓ CI passing")
-		case "failing":
-			prStr += " " + red.Render("✗ CI failing")
-		case "pending":
-			prStr += " " + yellow.Render("◎ CI pending")
-		}
-
-		parts = append(parts, prStr)
-
-		// Review state
-		switch item.PR.ReviewState {
-		case "approved":
-			parts = append(parts, green.Render("✓ Approved"))
-		case "changes_requested":
-			parts = append(parts, red.Render("⚠ Changes requested"))
-		case "review_required":
-			parts = append(parts, yellow.Render("◎ Review pending"))
-		}
-	} else if item.Issue != nil {
-		parts = append(parts, dim.Render("(no PR)"))
 	}
 
 	if len(parts) > 0 {
-		fmt.Printf("     %s\n", strings.Join(parts, "  "))
-	}
-
-	// Line 3: worktree path, last commit
-	if item.Worktree != nil {
-		lastCommit := ""
-		if !item.Worktree.LastCommit.IsZero() {
-			lastCommit = "  last commit: " + humanDuration(time.Since(item.Worktree.LastCommit))
-		}
-		fmt.Printf("     %s%s\n", dim.Render(item.Worktree.Path), dim.Render(lastCommit))
-	} else if item.Issue != nil {
-		fmt.Printf("     %s\n", dim.Render("(no branch)"))
+		fmt.Printf("    %s\n", strings.Join(parts, dotStr))
 	}
 
 	fmt.Println()
 }
 
-func renderScoreBar(score int) string {
-	// 3-block bar: each block fills at 33, 66, 100
-	blocks := 0
-	if score >= 33 {
-		blocks = 1
+func shortenPath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
 	}
-	if score >= 66 {
-		blocks = 2
-	}
-	if score >= 90 {
-		blocks = 3
+	p = strings.Replace(p, home, "~", 1)
+
+	if parts := strings.Split(p, "/worktrees/"); len(parts) == 2 {
+		return "…/" + parts[1]
 	}
 
-	bar := strings.Repeat("▓", blocks) + strings.Repeat("░", 3-blocks)
-
-	color := green
-	if score >= 60 {
-		color = red
-	} else if score >= 30 {
-		color = yellow
+	p = strings.TrimPrefix(p, "~/code/")
+	if filepath.IsAbs(p) {
+		return p
 	}
-
-	return color.Render(fmt.Sprintf("%s %d", bar, score))
+	return p
 }
 
 func truncate(s string, max int) string {
+	if max <= 0 {
+		return s
+	}
 	if len(s) <= max {
 		return s
+	}
+	if max <= 1 {
+		return "…"
 	}
 	return s[:max-1] + "…"
 }
@@ -158,13 +148,10 @@ func humanDuration(d time.Duration) string {
 		return "just now"
 	}
 	if d < time.Hour {
-		m := int(d.Minutes())
-		return fmt.Sprintf("%dm ago", m)
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	}
 	if d < 24*time.Hour {
-		h := int(d.Hours())
-		return fmt.Sprintf("%dh ago", h)
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
-	days := int(d.Hours() / 24)
-	return fmt.Sprintf("%dd ago", days)
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }

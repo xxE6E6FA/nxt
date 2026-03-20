@@ -9,7 +9,8 @@ import (
 // Link correlates Linear issues with worktrees and PRs, producing WorkItems.
 // Issues are the primary axis — each issue becomes a WorkItem.
 // PRs and worktrees not matched to any issue are added as standalone items.
-func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model.Worktree) []model.WorkItem {
+// repoMap maps "owner/name" → local repo root path for fallback linking via PR repo.
+func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model.Worktree, repoMap map[string]string) []model.WorkItem {
 	prUsed := make(map[int]bool)
 	wtUsed := make(map[string]bool)
 
@@ -42,14 +43,36 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 			}
 		}
 
+		// Fallback: if we have a PR but no worktree, use the repo map to find
+		// the local folder for the PR's repo.
+		if item.Worktree == nil && item.PR != nil && item.PR.Repo != "" {
+			if localPath, ok := repoMap[item.PR.Repo]; ok {
+				item.Worktree = &model.Worktree{
+					Path:     localPath,
+					Branch:   item.PR.HeadBranch,
+					RepoRoot: localPath,
+				}
+			}
+		}
+
 		items = append(items, item)
 	}
 
-	// Add unmatched PRs as standalone items
+	// Add unmatched PRs as standalone items, with repo-based folder linking
 	for i := range prs {
 		pr := &prs[i]
 		if !prUsed[pr.Number] {
-			items = append(items, model.WorkItem{PR: pr})
+			item := model.WorkItem{PR: pr}
+			if pr.Repo != "" {
+				if localPath, ok := repoMap[pr.Repo]; ok {
+					item.Worktree = &model.Worktree{
+						Path:     localPath,
+						Branch:   pr.HeadBranch,
+						RepoRoot: localPath,
+					}
+				}
+			}
+			items = append(items, item)
 		}
 	}
 
@@ -72,6 +95,13 @@ func matchBranch(issue *model.LinearIssue, branch string) bool {
 
 // matchPR checks if a PR matches a Linear issue.
 func matchPR(issue *model.LinearIssue, pr *model.PullRequest) bool {
+	// Primary: direct URL match from Linear attachments
+	for _, url := range issue.PRURLs {
+		if url == pr.URL {
+			return true
+		}
+	}
+
 	idLower := strings.ToLower(issue.Identifier)
 
 	// Check head branch

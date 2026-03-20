@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 
@@ -9,17 +10,12 @@ import (
 
 type Config struct {
 	Linear  LinearConfig  `toml:"linear"`
-	GitHub  GitHubConfig  `toml:"github"`
 	Local   LocalConfig   `toml:"local"`
 	Display DisplayConfig `toml:"display"`
 }
 
 type LinearConfig struct {
-	APIKey string `toml:"api_key"`
-}
-
-type GitHubConfig struct {
-	Repos []string `toml:"repos"`
+	APIKey string `toml:"api_key,omitempty"`
 }
 
 type LocalConfig struct {
@@ -27,7 +23,32 @@ type LocalConfig struct {
 }
 
 type DisplayConfig struct {
-	MaxItems int `toml:"max_items"`
+	MaxItems int    `toml:"max_items"`
+	Editor   string `toml:"editor,omitempty"` // command to open a folder, e.g. "code", "cursor", "zed"
+}
+
+// EditorCommand returns the configured editor, falling back to
+// $VISUAL → $EDITOR → "open" (macOS default).
+func (c *Config) EditorCommand() string {
+	if c.Display.Editor != "" {
+		return c.Display.Editor
+	}
+	if v := os.Getenv("VISUAL"); v != "" {
+		return v
+	}
+	if e := os.Getenv("EDITOR"); e != "" {
+		return e
+	}
+	return "open"
+}
+
+// Path returns the config file path (~/.config/nxt/config.toml).
+func Path() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "nxt", "config.toml"), nil
 }
 
 func Load() (*Config, error) {
@@ -35,12 +56,11 @@ func Load() (*Config, error) {
 		Display: DisplayConfig{MaxItems: 20},
 	}
 
-	configDir, err := os.UserConfigDir()
+	configPath, err := Path()
 	if err != nil {
-		configDir = filepath.Join(os.Getenv("HOME"), ".config")
+		return cfg, nil
 	}
 
-	configPath := filepath.Join(configDir, "nxt", "config.toml")
 	if _, err := os.Stat(configPath); err == nil {
 		if _, err := toml.DecodeFile(configPath, cfg); err != nil {
 			return nil, err
@@ -53,4 +73,28 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// Write persists the config to disk (excluding secrets).
+func Write(cfg *Config) error {
+	configPath, err := Path()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+
+	// Write config without the API key (stored in keychain)
+	writeCfg := *cfg
+	writeCfg.Linear.APIKey = ""
+
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(writeCfg); err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, buf.Bytes(), 0644)
 }
