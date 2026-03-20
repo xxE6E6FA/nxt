@@ -51,7 +51,7 @@ func main() {
 				updateSource("Linear", render.StatusLoading)
 			}
 			if !flags.NoCache {
-				if cache.Get("linear", &issues) {
+				if cache.GetWithTTL("linear", &issues, cache.LinearTTL) {
 					if updateSource != nil {
 						updateSource("Linear", render.StatusCached)
 					}
@@ -85,7 +85,7 @@ func main() {
 				return nil
 			}
 			if !flags.NoCache {
-				if cache.Get("worktrees", &scanRes) {
+				if cache.GetWithTTL("worktrees", &scanRes, cache.WorktreesTTL) {
 					if updateSource != nil {
 						updateSource("Worktrees", render.StatusCached)
 					}
@@ -109,7 +109,7 @@ func main() {
 		})
 
 		// Start authored PR search in parallel — doesn't need Linear data
-		githubCached := !flags.NoCache && cache.Get("github", &prs)
+		githubCached := !flags.NoCache && cache.GetWithTTL("github", &prs, cache.GitHubTTL)
 		if !githubCached {
 			if updateSource != nil {
 				updateSource("GitHub", render.StatusLoading)
