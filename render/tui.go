@@ -90,7 +90,7 @@ type sourceEntry struct {
 	status SourceStatus
 }
 
-var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var spinFrames = []string{"◐", "◓", "◑", "◒"}
 
 type spinTickMsg struct{}
 
@@ -203,7 +203,7 @@ func (m tuiModel) triggerRefresh() (tuiModel, tea.Cmd) {
 }
 
 func spinTick() tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
+	return tea.Tick(120*time.Millisecond, func(_ time.Time) tea.Msg {
 		return spinTickMsg{}
 	})
 }
