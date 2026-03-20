@@ -38,8 +38,14 @@ type SourceUpdate struct {
 	Status SourceStatus
 }
 
+// FetchFunc is the function signature for fetching work items.
+type FetchFunc func(updateSource func(name string, status SourceStatus)) FetchResult
+
 // execDoneMsg is sent when an exec'd process finishes.
 type execDoneMsg struct{ err error }
+
+// refreshTickMsg triggers an auto-refresh.
+type refreshTickMsg struct{}
 
 type phase int
 
@@ -61,8 +67,13 @@ type tuiModel struct {
 	fetchedAt time.Time
 
 	// Config
-	editor string // command to open folders
-	cfg    *config.Config
+	editor          string // command to open folders
+	cfg             *config.Config
+	refreshInterval time.Duration
+
+	// Fetch
+	fetchFunc FetchFunc
+	program   *tea.Program
 
 	// Settings sub-model
 	settings settingsModel
@@ -84,31 +95,26 @@ type spinTickMsg struct{}
 // RunInteractive launches the TUI immediately (showing spinner), then populates
 // with data when fetching completes. Returns an action only if the user wants
 // to quit entirely (currently always empty — actions execute inline via tea.Exec).
-func RunInteractive(cfg *config.Config, editor string, fetchFunc func(updateSource func(name string, status SourceStatus)) FetchResult) Action {
+func RunInteractive(cfg *config.Config, editor string, fetchFunc FetchFunc) Action {
+	interval := refreshIntervalFromConfig(cfg)
+
 	m := tuiModel{
-		phase:  phaseLoading,
-		editor: editor,
-		cfg:    cfg,
-		sources: []sourceEntry{
-			{name: "Linear", status: StatusPending},
-			{name: "Worktrees", status: StatusPending},
-			{name: "GitHub", status: StatusPending},
-		},
+		phase:           phaseLoading,
+		editor:          editor,
+		cfg:             cfg,
+		fetchFunc:       fetchFunc,
+		refreshInterval: interval,
+		sources:         defaultSources(),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
+	m.program = p
 
 	go func() {
 		result := fetchFunc(func(name string, status SourceStatus) {
 			p.Send(SourceUpdate{Name: name, Status: status})
 		})
-		sort.Slice(result.Items, func(i, j int) bool {
-			return result.Items[i].Score > result.Items[j].Score
-		})
-		if cfg.Display.MaxItems > 0 && len(result.Items) > cfg.Display.MaxItems {
-			result.Items = result.Items[:cfg.Display.MaxItems]
-		}
-		p.Send(result)
+		p.Send(prepareFetchResult(result, cfg.Display.MaxItems))
 	}()
 
 	result, err := p.Run()
@@ -119,8 +125,71 @@ func RunInteractive(cfg *config.Config, editor string, fetchFunc func(updateSour
 	return result.(tuiModel).action
 }
 
+func defaultSources() []sourceEntry {
+	return []sourceEntry{
+		{name: "Linear", status: StatusPending},
+		{name: "Worktrees", status: StatusPending},
+		{name: "GitHub", status: StatusPending},
+	}
+}
+
+func prepareFetchResult(result FetchResult, maxItems int) FetchResult {
+	sort.Slice(result.Items, func(i, j int) bool {
+		return result.Items[i].Score > result.Items[j].Score
+	})
+	if maxItems > 0 && len(result.Items) > maxItems {
+		result.Items = result.Items[:maxItems]
+	}
+	return result
+}
+
+func refreshIntervalFromConfig(cfg *config.Config) time.Duration {
+	if cfg.Display.RefreshInterval < 0 {
+		return 0
+	}
+	if cfg.Display.RefreshInterval == 0 {
+		return 5 * time.Minute // default
+	}
+	return time.Duration(cfg.Display.RefreshInterval) * time.Second
+}
+
 func (m tuiModel) Init() tea.Cmd {
-	return spinTick()
+	cmds := []tea.Cmd{spinTick()}
+	if m.refreshInterval > 0 {
+		cmds = append(cmds, m.scheduleRefresh())
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m tuiModel) scheduleRefresh() tea.Cmd {
+	return tea.Tick(m.refreshInterval, func(_ time.Time) tea.Msg {
+		return refreshTickMsg{}
+	})
+}
+
+// triggerRefresh resets the model to loading state and kicks off a new fetch.
+func (m tuiModel) triggerRefresh() (tuiModel, tea.Cmd) {
+	m.phase = phaseLoading
+	m.sources = defaultSources()
+
+	prog := m.program
+	fetchFn := m.fetchFunc
+	maxItems := m.cfg.Display.MaxItems
+
+	cmd := func() tea.Msg {
+		result := fetchFn(func(name string, status SourceStatus) {
+			if prog != nil {
+				prog.Send(SourceUpdate{Name: name, Status: status})
+			}
+		})
+		return prepareFetchResult(result, maxItems)
+	}
+
+	cmds := []tea.Cmd{cmd, spinTick()}
+	if m.refreshInterval > 0 {
+		cmds = append(cmds, m.scheduleRefresh())
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func spinTick() tea.Cmd {
@@ -159,6 +228,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fetchedAt = time.Now()
 		return m, nil
 
+	case refreshTickMsg:
+		// Auto-refresh: only refresh if we're on the list view (not mid-action)
+		if m.phase == phaseReady {
+			return m.triggerRefresh()
+		}
+		// Reschedule if we skipped (e.g. in settings or detail view)
+		if m.refreshInterval > 0 {
+			return m, m.scheduleRefresh()
+		}
+		return m, nil
+
 	case execDoneMsg:
 		// Returned from editor/claude — TUI resumes
 		return m, nil
@@ -192,6 +272,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case keyEsc:
 		return m, tea.Quit
+	}
+
+	// Refresh works even with empty items
+	if msg.String() == "r" && m.phase == phaseReady {
+		return m.triggerRefresh()
 	}
 
 	if m.phase != phaseReady || len(m.items) == 0 {
@@ -552,17 +637,19 @@ func renderPRParts(pr *model.PullRequest) []string {
 }
 
 func (m tuiModel) renderHelp() string {
+	keyStyle := lipgloss.NewStyle().Foreground(colorHelpKey)
+	lblStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
+
 	if len(m.items) == 0 {
-		return ""
+		return keyStyle.Render("r") + lblStyle.Render(" refresh") + "  " +
+			keyStyle.Render("s") + lblStyle.Render(" settings") + "  " +
+			keyStyle.Render("q") + lblStyle.Render(" quit")
 	}
 
 	item := m.items[m.cursor]
 	hasWt := item.Worktree != nil && !item.Worktree.IsMain
 	hasIssue := item.Issue != nil
 	hasPR := item.PR != nil
-
-	keyStyle := lipgloss.NewStyle().Foreground(colorHelpKey)
-	lblStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
 
 	var keys []string
 	if hasWt {
@@ -579,6 +666,7 @@ func (m tuiModel) renderHelp() string {
 	}
 	keys = append(keys,
 		keyStyle.Render("d")+lblStyle.Render(" detail"),
+		keyStyle.Render("r")+lblStyle.Render(" refresh"),
 		keyStyle.Render("s")+lblStyle.Render(" settings"),
 		keyStyle.Render("q")+lblStyle.Render(" quit"),
 	)

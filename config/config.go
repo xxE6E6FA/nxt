@@ -23,8 +23,9 @@ type LocalConfig struct {
 }
 
 type DisplayConfig struct {
-	MaxItems int    `toml:"max_items"`
-	Editor   string `toml:"editor,omitempty"` // command to open a folder, e.g. "code", "cursor", "zed"
+	MaxItems        int    `toml:"max_items"`
+	Editor          string `toml:"editor,omitempty"`           // command to open a folder, e.g. "code", "cursor", "zed"
+	RefreshInterval int    `toml:"refresh_interval,omitempty"` // auto-refresh seconds; 0 disables (default 300)
 }
 
 // EditorCommand returns the configured editor, falling back to
