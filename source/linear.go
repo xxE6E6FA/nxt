@@ -11,6 +11,8 @@ import (
 	"github.com/xxE6E6FA/nxt/model"
 )
 
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
 const linearAPI = "https://api.linear.app/graphql"
 
 const issuesQuery = `{
@@ -114,7 +116,7 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("linear API request failed: %w", err)
 	}
