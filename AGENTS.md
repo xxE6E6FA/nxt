@@ -65,13 +65,48 @@ editor = "cursor"        # command to open folders; falls back to $VISUAL → $E
 
 ```bash
 make build               # compile (outputs ./nxt)
+make install             # build and install to $GOPATH/bin (with version from git)
 make run                 # build and run
 ./nxt                    # interactive TUI
 ./nxt --json             # JSON output
 ./nxt --no-cache         # fresh fetch
 ./nxt --debug            # debug info to stderr
 ./nxt --setup            # re-run setup wizard
+./nxt --version          # print version
+./nxt --update           # self-update from latest GitHub release
 ```
+
+## Build and release workflow
+
+### When to build locally
+
+After any code change, run `make install` to update the local binary. This ensures the user is always running the latest version during development. Do this:
+- After finishing a feature or bug fix (post-commit)
+- When the user asks to try or test a change
+- As part of session completion (see Landing the Plane)
+
+### When to cut a release
+
+Cut a release with `make release V=x.y.z` when:
+- A meaningful set of changes has landed on main (new feature, significant fix)
+- The user explicitly asks for a release
+- **Do NOT release for docs-only, config-only, or trivial changes**
+
+Versioning follows semver:
+- **Patch** (0.1.x): bug fixes, small improvements
+- **Minor** (0.x.0): new features, new flags, new data sources
+- **Major** (x.0.0): breaking config changes, removed flags
+
+Before releasing, always:
+1. Run `make audit` — all checks must pass
+2. Verify the version tag doesn't already exist
+3. Push all commits to main first
+
+`make release` tags and pushes; GitHub Actions handles the rest (cross-compile + upload binaries).
+
+### After pushing to main
+
+Always run `make install` after pushing so the local binary matches what's on main. If a release was cut, verify it with `nxt --version`.
 
 ## Quality gates
 
@@ -255,9 +290,14 @@ For more details, see README.md and docs/QUICKSTART.md.
    git push
    git status  # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+5. **Install locally** (if code changed):
+   ```bash
+   make install
+   nxt --version  # verify the binary is up to date
+   ```
+6. **Clean up** - Clear stashes, prune remote branches
+7. **Verify** - All changes committed AND pushed, local binary updated
+8. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
