@@ -7,11 +7,17 @@ import (
 	"time"
 )
 
-const defaultTTL = 60 * time.Second
+// Default TTLs per source. Callers can override via GetWithTTL.
+const (
+	DefaultTTL    = 5 * time.Minute
+	GitHubTTL     = 5 * time.Minute
+	LinearTTL     = 2 * time.Minute
+	WorktreesTTL  = 30 * time.Second
+)
 
 type entry struct {
-	Data      json.RawMessage `json:"data"`
-	CachedAt  time.Time       `json:"cached_at"`
+	Data     json.RawMessage `json:"data"`
+	CachedAt time.Time       `json:"cached_at"`
 }
 
 func cacheDir() string {
@@ -26,8 +32,14 @@ func cachePath(key string) string {
 	return filepath.Join(cacheDir(), key+".json")
 }
 
-// Get retrieves a cached value if it exists and is fresh. Returns nil if stale or missing.
+// Get retrieves a cached value using the DefaultTTL. Returns false if stale or missing.
 func Get(key string, dest interface{}) bool {
+	return GetWithTTL(key, dest, DefaultTTL)
+}
+
+// GetWithTTL retrieves a cached value if it exists and is fresher than the given TTL.
+// Returns false if stale or missing.
+func GetWithTTL(key string, dest interface{}, ttl time.Duration) bool {
 	data, err := os.ReadFile(cachePath(key))
 	if err != nil {
 		return false
@@ -38,7 +50,7 @@ func Get(key string, dest interface{}) bool {
 		return false
 	}
 
-	if time.Since(e.CachedAt) > defaultTTL {
+	if time.Since(e.CachedAt) > ttl {
 		return false
 	}
 
