@@ -11,6 +11,11 @@ import (
 	"github.com/xxE6E6FA/nxt/model"
 )
 
+func init() {
+	// Stub out browser opening so tests don't spawn "open" processes.
+	openBrowserFunc = func(_ string) {}
+}
+
 // --- nxt-bmc: Test handleKey action branches ---
 
 func itemWithWorktree() model.WorkItem {

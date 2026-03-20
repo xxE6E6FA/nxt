@@ -343,13 +343,13 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if item.Issue != nil && item.Issue.URL != "" {
 			m.lastAction = Action{Kind: "open-linear", Path: item.Issue.URL}
-			openBrowser(item.Issue.URL)
+			openBrowserFunc(item.Issue.URL)
 		}
 
 	case "g":
 		if item.PR != nil && item.PR.URL != "" {
 			m.lastAction = Action{Kind: "open-github", Path: item.PR.URL}
-			openBrowser(item.PR.URL)
+			openBrowserFunc(item.PR.URL)
 		}
 
 	case "d":
@@ -810,6 +810,8 @@ func wtPath(item model.WorkItem) string {
 	return ""
 }
 
-func openBrowser(url string) {
+// openBrowserFunc is the function used to open URLs in a browser.
+// Replaced in tests to avoid spawning processes.
+var openBrowserFunc = func(url string) {
 	_ = exec.Command("open", url).Start()
 }
