@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
@@ -32,6 +34,12 @@ func main() {
 	setup.EnsureSetup(cfg, flags.Setup)
 
 	interactive := !flags.JSON && !flags.Debug && term.IsTerminal(int(os.Stdout.Fd()))
+
+	// Benchmark mode: fetch everything with no cache, print timings, exit.
+	if flags.Benchmark {
+		runBenchmark(cfg, flags.Verbose)
+		return
+	}
 
 	// Build the fetch function used by both interactive and non-interactive paths.
 	fetchData := func(updateSource func(string, render.SourceStatus)) render.FetchResult {
@@ -165,24 +173,14 @@ func main() {
 				updateSource("GitHub", render.StatusCached)
 			}
 			go func() {
-				var prURLs []string
-				for _, issue := range issues {
-					prURLs = append(prURLs, issue.PRURLs...)
-				}
 				authored, _ := source.FetchAuthoredPRs()
-				linked, _ := source.FetchLinkedPRs(prURLs)
-				_ = cache.Set("github", source.MergePRs(authored, linked))
+				_ = cache.Set("github", authored)
 			}()
 		default: // cache miss — fetch synchronously
-			var prURLs []string
-			for _, issue := range issues {
-				prURLs = append(prURLs, issue.PRURLs...)
-			}
-			linkedPRs, err := source.FetchLinkedPRs(prURLs)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("github linked: %v", err))
-			}
-			prs = source.MergePRs(authoredPRs, linkedPRs)
+			// Authored PR search already covers all open PRs by the user.
+			// Linked PR URLs from Linear are used only for matching (by the linker),
+			// not for fetching — teammate PRs on shared issues are skipped entirely.
+			prs = authoredPRs
 			if err != nil {
 				if updateSource != nil {
 					updateSource("GitHub", render.StatusError)
@@ -243,4 +241,112 @@ func main() {
 	}
 
 	render.Render(result.Items, cfg.Display.MaxItems)
+}
+
+func runBenchmark(cfg *config.Config, verbose bool) {
+	type timing struct {
+		Name     string
+		Duration time.Duration
+		Count    int
+		Error    string
+	}
+
+	var mu sync.Mutex
+	var timings []timing
+	record := func(name string, d time.Duration, count int, err error) {
+		t := timing{Name: name, Duration: d, Count: count}
+		if err != nil {
+			t.Error = err.Error()
+		}
+		mu.Lock()
+		timings = append(timings, t)
+		mu.Unlock()
+	}
+
+	totalStart := time.Now()
+
+	fmt.Fprintf(os.Stderr, "Fetching all sources (no cache)...\n\n")
+
+	// Phase 1: parallel fetches
+	g := new(errgroup.Group)
+	var issues []model.LinearIssue
+	var scanRes source.ScanResult
+	var authoredPRs []model.PullRequest
+
+	g.Go(func() error {
+		start := time.Now()
+		var err error
+		issues, err = source.FetchLinearIssues(cfg.Linear.APIKey)
+		record("Linear issues", time.Since(start), len(issues), err)
+		return nil
+	})
+
+	g.Go(func() error {
+		if len(cfg.Local.BaseDirs) == 0 {
+			record("Worktrees", 0, 0, nil)
+			return nil
+		}
+		start := time.Now()
+		var err error
+		scanRes, err = source.ScanWorktrees(cfg.Local.BaseDirs)
+		record("Worktrees", time.Since(start), len(scanRes.Worktrees), err)
+		return nil
+	})
+
+	g.Go(func() error {
+		start := time.Now()
+		var err error
+		authoredPRs, err = source.FetchAuthoredPRs()
+		record("GitHub authored PRs", time.Since(start), len(authoredPRs), err)
+		return nil
+	})
+
+	_ = g.Wait()
+
+	if verbose {
+		authoredURLs := make(map[string]bool, len(authoredPRs))
+		for _, pr := range authoredPRs {
+			authoredURLs[pr.URL] = true
+		}
+		fmt.Fprintf(os.Stderr, "\n--- Linear Issues & Attachments ---\n")
+		for _, issue := range issues {
+			fmt.Fprintf(os.Stderr, "  %s  %s  (state: %s)\n", issue.Identifier, issue.Title, issue.Status)
+			for _, u := range issue.PRURLs {
+				tag := " [teammate]"
+				if !source.IsPRURL(u) {
+					tag = " [commit, skip]"
+				} else if authoredURLs[u] {
+					tag = " [yours]"
+				}
+				fmt.Fprintf(os.Stderr, "    → %s%s\n", u, tag)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "\n--- Authored PRs ---\n")
+		for _, pr := range authoredPRs {
+			fmt.Fprintf(os.Stderr, "  #%d %s  %s\n", pr.Number, pr.Repo, pr.URL)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	prs := authoredPRs
+
+	linkStart := time.Now()
+	items := linker.Link(issues, prs, scanRes.Worktrees, scanRes.RepoMap)
+	scorer.Score(items)
+	record("Link + Score", time.Since(linkStart), len(items), nil)
+
+	totalDuration := time.Since(totalStart)
+
+	// Print results
+	fmt.Fprintf(os.Stderr, "%-25s %10s %8s %s\n", "SOURCE", "TIME", "COUNT", "STATUS")
+	fmt.Fprintf(os.Stderr, "%-25s %10s %8s %s\n", "─────────────────────────", "──────────", "────────", "──────")
+	for _, t := range timings {
+		status := "ok"
+		if t.Error != "" {
+			status = "ERR: " + t.Error
+		}
+		fmt.Fprintf(os.Stderr, "%-25s %10s %8d %s\n", t.Name, t.Duration.Round(time.Millisecond), t.Count, status)
+	}
+	fmt.Fprintf(os.Stderr, "%-25s %10s %8s\n", "─────────────────────────", "──────────", "────────")
+	fmt.Fprintf(os.Stderr, "%-25s %10s %8d\n", "TOTAL", totalDuration.Round(time.Millisecond), len(items))
 }
