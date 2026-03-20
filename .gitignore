@@ -1,5 +1,10 @@
 nxt
 
+# Test/build artifacts
+coverage.out
+coverage.html
+*.test
+
 # Dolt database files (added by bd init)
 .dolt/
 *.db
