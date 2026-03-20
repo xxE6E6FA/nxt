@@ -148,16 +148,38 @@ func isPRURL(url string) bool {
 	return strings.Contains(url, "/pull/")
 }
 
-// FetchPullRequests discovers open PRs from two sources in parallel:
-// 1. PRs linked from Linear issues (fetched by URL, concurrently)
-// 2. PRs authored by the current user (gh search, per account, concurrently)
-// Returns deduplicated results.
-func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
+// FetchAuthoredPRs searches for open PRs authored by the current user
+// across all authenticated GitHub accounts. This does not depend on
+// Linear data and can run in parallel with the Linear fetch.
+func FetchAuthoredPRs() ([]model.PullRequest, error) {
 	var mu sync.Mutex
-	seen := make(map[string]bool)
 	var allPRs []model.PullRequest
+	var wg sync.WaitGroup
 
+	for _, acct := range ghAccounts() {
+		wg.Add(1)
+		go func(a string) {
+			defer wg.Done()
+			authored, err := searchAuthoredPRs(a)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  ⚠ github search (%s): %v\n", a, err)
+				return
+			}
+			mu.Lock()
+			allPRs = append(allPRs, authored...)
+			mu.Unlock()
+		}(acct)
+	}
+
+	wg.Wait()
+	return allPRs, nil
+}
+
+// FetchLinkedPRs fetches PRs by URL (typically from Linear issue attachments).
+// It fetches each PR concurrently, bounded to 8 at a time.
+func FetchLinkedPRs(prURLs []string) ([]model.PullRequest, error) {
 	// Deduplicate and filter URLs upfront
+	seen := make(map[string]bool)
 	var uniqueURLs []string
 	for _, url := range prURLs {
 		if isPRURL(url) && !seen[url] {
@@ -165,12 +187,11 @@ func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
 			uniqueURLs = append(uniqueURLs, url)
 		}
 	}
-	// Reset seen — we used it just for dedup above
-	seen = make(map[string]bool)
 
+	var mu sync.Mutex
+	var allPRs []model.PullRequest
 	var wg sync.WaitGroup
 
-	// Source 1: Fetch all Linear-linked PRs concurrently (bounded to 8)
 	sem := make(chan struct{}, 8)
 	for _, url := range uniqueURLs {
 		wg.Add(1)
@@ -184,37 +205,32 @@ func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
 				return
 			}
 			mu.Lock()
-			if !seen[pr.URL] {
-				seen[pr.URL] = true
-				allPRs = append(allPRs, *pr)
-			}
+			allPRs = append(allPRs, *pr)
 			mu.Unlock()
 		}(url)
 	}
 
-	// Source 2: Search authored PRs per account concurrently
-	for _, acct := range ghAccounts() {
-		wg.Add(1)
-		go func(a string) {
-			defer wg.Done()
-			authored, err := searchAuthoredPRs(a)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠ github search (%s): %v\n", a, err)
-				return
-			}
-			mu.Lock()
-			for i := range authored {
-				if !seen[authored[i].URL] {
-					seen[authored[i].URL] = true
-					allPRs = append(allPRs, authored[i])
-				}
-			}
-			mu.Unlock()
-		}(acct)
-	}
-
 	wg.Wait()
 	return allPRs, nil
+}
+
+// MergePRs combines two PR slices and deduplicates by URL.
+func MergePRs(a, b []model.PullRequest) []model.PullRequest {
+	seen := make(map[string]bool, len(a)+len(b))
+	merged := make([]model.PullRequest, 0, len(a)+len(b))
+	for _, pr := range a {
+		if !seen[pr.URL] {
+			seen[pr.URL] = true
+			merged = append(merged, pr)
+		}
+	}
+	for _, pr := range b {
+		if !seen[pr.URL] {
+			seen[pr.URL] = true
+			merged = append(merged, pr)
+		}
+	}
+	return merged
 }
 
 func fetchPRByURL(url string) (*model.PullRequest, error) {
