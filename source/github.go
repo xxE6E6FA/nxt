@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,290 @@ type ghPRFull struct {
 }
 
 const prViewFields = "number,title,headRefName,url,state,isDraft,body,createdAt,updatedAt,additions,deletions,changedFiles,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,comments,reviewRequests,labels"
+
+// prGraphQLFragment contains the GraphQL fields to fetch for each PR.
+const prGraphQLFragment = `
+  number title headRefName url state isDraft body
+  createdAt updatedAt additions deletions changedFiles
+  mergeable mergeStateStatus reviewDecision
+  commits(last: 1) {
+    nodes {
+      commit {
+        statusCheckRollup {
+          contexts(first: 100) {
+            nodes {
+              ... on StatusContext { state }
+              ... on CheckRun { conclusion }
+            }
+          }
+        }
+      }
+    }
+  }
+  comments { totalCount }
+  reviewRequests(first: 10) {
+    nodes {
+      requestedReviewer {
+        ... on User { login }
+        ... on Team { slug }
+      }
+    }
+  }
+  labels(first: 20) { nodes { name } }
+`
+
+// prRepoKey groups PRs by owner/name for batched fetching.
+type prRepoKey struct {
+	Owner string
+	Name  string
+}
+
+// graphqlPRResponse mirrors the GraphQL response shape for a single PR node.
+type graphqlPRResponse struct {
+	Number           int    `json:"number"`
+	Title            string `json:"title"`
+	HeadRefName      string `json:"headRefName"`
+	URL              string `json:"url"`
+	State            string `json:"state"`
+	IsDraft          bool   `json:"isDraft"`
+	Body             string `json:"body"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	Additions        int    `json:"additions"`
+	Deletions        int    `json:"deletions"`
+	ChangedFiles     int    `json:"changedFiles"`
+	Mergeable        string `json:"mergeable"`
+	MergeStateStatus string `json:"mergeStateStatus"`
+	ReviewDecision   string `json:"reviewDecision"`
+	Commits          struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					Contexts struct {
+						Nodes []struct {
+							State      string `json:"state"`
+							Conclusion string `json:"conclusion"`
+						} `json:"nodes"`
+					} `json:"contexts"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+	Comments struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"comments"`
+	ReviewRequests struct {
+		Nodes []struct {
+			RequestedReviewer struct {
+				Login string `json:"login"`
+				Slug  string `json:"slug"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
+	Labels struct {
+		Nodes []ghLabel `json:"nodes"`
+	} `json:"labels"`
+}
+
+// graphqlPRToFull converts a GraphQL PR response to the existing ghPRFull type.
+func graphqlPRToFull(g *graphqlPRResponse) *ghPRFull {
+	full := &ghPRFull{
+		Number:           g.Number,
+		Title:            g.Title,
+		HeadRefName:      g.HeadRefName,
+		URL:              g.URL,
+		State:            g.State,
+		IsDraft:          g.IsDraft,
+		Body:             g.Body,
+		CreatedAt:        g.CreatedAt,
+		UpdatedAt:        g.UpdatedAt,
+		Additions:        g.Additions,
+		Deletions:        g.Deletions,
+		ChangedFiles:     g.ChangedFiles,
+		Mergeable:        g.Mergeable,
+		MergeStateStatus: g.MergeStateStatus,
+		ReviewDecision:   g.ReviewDecision,
+	}
+
+	// Extract CI checks from commits
+	if len(g.Commits.Nodes) > 0 {
+		commit := g.Commits.Nodes[0].Commit
+		if commit.StatusCheckRollup != nil {
+			for _, ctx := range commit.StatusCheckRollup.Contexts.Nodes {
+				state := ctx.State
+				if state == "" {
+					state = ctx.Conclusion
+				}
+				full.StatusCheckRollup = append(full.StatusCheckRollup, ciCheck{State: state})
+			}
+		}
+	}
+
+	// Convert comments totalCount to a slice of the right length
+	full.Comments = make([]json.RawMessage, g.Comments.TotalCount)
+
+	// Convert review requests
+	for _, rr := range g.ReviewRequests.Nodes {
+		full.ReviewRequests = append(full.ReviewRequests, ghReviewRequest{
+			Login: rr.RequestedReviewer.Login,
+			Slug:  rr.RequestedReviewer.Slug,
+		})
+	}
+
+	// Convert labels
+	for _, l := range g.Labels.Nodes {
+		full.Labels = append(full.Labels, l)
+	}
+
+	return full
+}
+
+// numberFromURL extracts the PR number from a GitHub PR URL.
+func numberFromURL(url string) int {
+	parts := strings.Split(strings.TrimRight(url, "/"), "/")
+	for i, p := range parts {
+		if p == "pull" && i+1 < len(parts) {
+			n, err := strconv.Atoi(parts[i+1])
+			if err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// batchFetchPRsByGraphQL fetches multiple PRs across repos in a single GraphQL call.
+// prsByRepo maps prRepoKey to a slice of PR numbers.
+// Returns a map from "owner/name#number" to the fetched ghPRFull.
+func batchFetchPRsByGraphQL(token string, prsByRepo map[prRepoKey][]int) (map[string]*ghPRFull, error) {
+	if len(prsByRepo) == 0 {
+		return nil, nil
+	}
+
+	// Build a single GraphQL query with aliases for each repo and PR
+	var queryParts []string
+	// Track alias -> repo key + number for mapping results back
+	type aliasInfo struct {
+		repoAlias string
+		prAlias   string
+		owner     string
+		name      string
+		number    int
+	}
+	var aliases []aliasInfo
+
+	repoIdx := 0
+	for key, numbers := range prsByRepo {
+		repoAlias := fmt.Sprintf("repo%d", repoIdx)
+		var prParts []string
+		for prIdx, num := range numbers {
+			prAlias := fmt.Sprintf("pr%d_%d", repoIdx, prIdx)
+			prParts = append(prParts, fmt.Sprintf("    %s: pullRequest(number: %d) { %s }", prAlias, num, prGraphQLFragment))
+			aliases = append(aliases, aliasInfo{
+				repoAlias: repoAlias,
+				prAlias:   prAlias,
+				owner:     key.Owner,
+				name:      key.Name,
+				number:    num,
+			})
+		}
+		queryParts = append(queryParts, fmt.Sprintf("  %s: repository(owner: %q, name: %q) {\n%s\n  }",
+			repoAlias, key.Owner, key.Name, strings.Join(prParts, "\n")))
+		repoIdx++
+	}
+
+	query := fmt.Sprintf("query {\n%s\n}", strings.Join(queryParts, "\n"))
+
+	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query)
+	cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("graphql batch fetch: %w", wrapExecErr(err))
+	}
+
+	// Parse the response: { "data": { "repo0": { "pr0_0": { ... }, "pr0_1": { ... } }, "repo1": { ... } } }
+	var resp struct {
+		Data   map[string]json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("graphql parse response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql errors: %s", resp.Errors[0].Message)
+	}
+
+	results := make(map[string]*ghPRFull)
+
+	for _, ai := range aliases {
+		repoData, ok := resp.Data[ai.repoAlias]
+		if !ok {
+			continue
+		}
+
+		var prMap map[string]json.RawMessage
+		if err := json.Unmarshal(repoData, &prMap); err != nil {
+			continue
+		}
+
+		prData, ok := prMap[ai.prAlias]
+		if !ok {
+			continue
+		}
+
+		var gqlPR graphqlPRResponse
+		if err := json.Unmarshal(prData, &gqlPR); err != nil {
+			continue
+		}
+
+		full := graphqlPRToFull(&gqlPR)
+		key := fmt.Sprintf("%s/%s#%d", ai.owner, ai.name, ai.number)
+		results[key] = full
+	}
+
+	return results, nil
+}
+
+// batchFetchPRsByGraphQLForOwner fetches PRs for repos that share the same owner token.
+// Groups by owner, resolves token, and calls batchFetchPRsByGraphQL.
+func batchFetchPRsByGraphQLGrouped(prsByRepo map[prRepoKey][]int) (map[string]*ghPRFull, error) {
+	// Group repos by owner to use correct tokens
+	type ownerGroup struct {
+		token    string
+		prsByRepo map[prRepoKey][]int
+	}
+	groups := make(map[string]*ownerGroup)
+
+	for key, numbers := range prsByRepo {
+		g, ok := groups[key.Owner]
+		if !ok {
+			tok := tokenForRepo(key.Owner)
+			if tok == "" {
+				continue
+			}
+			g = &ownerGroup{token: tok, prsByRepo: make(map[prRepoKey][]int)}
+			groups[key.Owner] = g
+		}
+		g.prsByRepo[key] = numbers
+	}
+
+	allResults := make(map[string]*ghPRFull)
+	for _, g := range groups {
+		results, err := batchFetchPRsByGraphQL(g.token, g.prsByRepo)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range results {
+			allResults[k] = v
+		}
+	}
+
+	return allResults, nil
+}
 
 // ghAccountTokens caches resolved tokens per GitHub account.
 var ghAccountTokens = map[string]string{}
@@ -149,7 +434,7 @@ func isPRURL(url string) bool {
 }
 
 // FetchPullRequests discovers open PRs from two sources in parallel:
-// 1. PRs linked from Linear issues (fetched by URL, concurrently)
+// 1. PRs linked from Linear issues (batched by repo via GraphQL)
 // 2. PRs authored by the current user (gh search, per account, concurrently)
 // Returns deduplicated results.
 func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
@@ -170,27 +455,22 @@ func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
 
 	var wg sync.WaitGroup
 
-	// Source 1: Fetch all Linear-linked PRs concurrently (bounded to 8)
-	sem := make(chan struct{}, 8)
-	for _, url := range uniqueURLs {
-		wg.Add(1)
-		go func(u string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+	// Source 1: Batch-fetch all Linear-linked PRs via GraphQL
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 
-			pr, err := fetchPRByURL(u)
-			if err != nil {
-				return
+		linkedPRs := batchFetchPRsByURL(uniqueURLs)
+
+		mu.Lock()
+		for i := range linkedPRs {
+			if !seen[linkedPRs[i].URL] {
+				seen[linkedPRs[i].URL] = true
+				allPRs = append(allPRs, linkedPRs[i])
 			}
-			mu.Lock()
-			if !seen[pr.URL] {
-				seen[pr.URL] = true
-				allPRs = append(allPRs, *pr)
-			}
-			mu.Unlock()
-		}(url)
-	}
+		}
+		mu.Unlock()
+	}()
 
 	// Source 2: Search authored PRs per account concurrently
 	for _, acct := range ghAccounts() {
@@ -217,6 +497,99 @@ func FetchPullRequests(prURLs []string) ([]model.PullRequest, error) {
 	return allPRs, nil
 }
 
+// batchFetchPRsByURL groups PR URLs by repo, fetches them via batched GraphQL,
+// and falls back to individual fetches for any failures.
+func batchFetchPRsByURL(urls []string) []model.PullRequest {
+	if len(urls) == 0 {
+		return nil
+	}
+
+	// Group URLs by repo
+	type urlInfo struct {
+		url    string
+		owner  string
+		repo   string
+		number int
+	}
+	var infos []urlInfo
+	prsByRepo := make(map[prRepoKey][]int)
+
+	for _, u := range urls {
+		owner := ownerFromURL(u)
+		repo := repoFromURL(u)
+		num := numberFromURL(u)
+		if owner == "" || repo == "" || num == 0 {
+			continue
+		}
+		parts := strings.SplitN(repo, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := prRepoKey{Owner: parts[0], Name: parts[1]}
+		prsByRepo[key] = append(prsByRepo[key], num)
+		infos = append(infos, urlInfo{url: u, owner: owner, repo: repo, number: num})
+	}
+
+	// Try batched GraphQL fetch
+	details, err := batchFetchPRsByGraphQLGrouped(prsByRepo)
+	if err != nil {
+		// Fallback to individual fetches
+		fmt.Fprintf(os.Stderr, "  ⚠ graphql batch (linked PRs) failed, falling back: %v\n", err)
+		return fetchPRsByURLIndividually(urls)
+	}
+
+	var prs []model.PullRequest
+	var failedURLs []string
+
+	for _, info := range infos {
+		lookupKey := fmt.Sprintf("%s#%d", info.repo, info.number)
+		detail, ok := details[lookupKey]
+		if !ok {
+			failedURLs = append(failedURLs, info.url)
+			continue
+		}
+		pr := fullToPR(detail, info.url)
+		pr.Repo = info.repo
+		prs = append(prs, *pr)
+	}
+
+	// Fetch any missing PRs individually
+	if len(failedURLs) > 0 {
+		fallback := fetchPRsByURLIndividually(failedURLs)
+		prs = append(prs, fallback...)
+	}
+
+	return prs
+}
+
+// fetchPRsByURLIndividually fetches PRs one at a time as a fallback.
+func fetchPRsByURLIndividually(urls []string) []model.PullRequest {
+	var mu sync.Mutex
+	var prs []model.PullRequest
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+
+	for _, url := range urls {
+		wg.Add(1)
+		go func(u string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			pr, err := fetchPRByURL(u)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			prs = append(prs, *pr)
+			mu.Unlock()
+		}(url)
+	}
+
+	wg.Wait()
+	return prs
+}
+
 func fetchPRByURL(url string) (*model.PullRequest, error) {
 	owner := ownerFromURL(url)
 	cmd := ghCmd(owner, "pr", "view", url, "--json", prViewFields)
@@ -235,7 +608,7 @@ func fetchPRByURL(url string) (*model.PullRequest, error) {
 }
 
 // searchAuthoredPRs finds open PRs authored by a specific account.
-// The search itself returns basic info; we enrich each PR concurrently.
+// The search itself returns basic info; we enrich PRs using a batched GraphQL query.
 func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 	tok := ghTokenForUser(account)
 	if tok == "" {
@@ -260,10 +633,12 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 		return nil, fmt.Errorf("failed to parse gh search output: %w", err)
 	}
 
-	// Enrich all PRs concurrently
-	prs := make([]model.PullRequest, len(results))
-	var wg sync.WaitGroup
+	if len(results) == 0 {
+		return nil, nil
+	}
 
+	// Build basic PRs from search results
+	prs := make([]model.PullRequest, len(results))
 	for i, r := range results {
 		prs[i] = model.PullRequest{
 			Number:  r.Number,
@@ -277,7 +652,60 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 		if t, err := time.Parse(time.RFC3339, r.UpdatedAt); err == nil {
 			prs[i].UpdatedAt = t
 		}
+	}
 
+	// Group PRs by repo for batched GraphQL fetch
+	prsByRepo := make(map[prRepoKey][]int)
+	for _, r := range results {
+		parts := strings.SplitN(r.Repository.NameWithOwner, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := prRepoKey{Owner: parts[0], Name: parts[1]}
+		prsByRepo[key] = append(prsByRepo[key], r.Number)
+	}
+
+	// Batch fetch all PR details via GraphQL
+	details, err := batchFetchPRsByGraphQL(tok, prsByRepo)
+	if err != nil {
+		// Fallback: enrich individually
+		fmt.Fprintf(os.Stderr, "  ⚠ graphql batch failed, falling back to individual fetches: %v\n", err)
+		enrichPRsIndividually(prs, results)
+		return prs, nil
+	}
+
+	// Apply enriched details to PRs
+	for i, r := range results {
+		lookupKey := fmt.Sprintf("%s#%d", r.Repository.NameWithOwner, r.Number)
+		detail, ok := details[lookupKey]
+		if !ok {
+			continue
+		}
+		prs[i].HeadBranch = detail.HeadRefName
+		prs[i].CIStatus = deriveCIStatus(detail.StatusCheckRollup)
+		prs[i].ReviewState = deriveReviewState(detail.ReviewDecision)
+		prs[i].Additions = detail.Additions
+		prs[i].Deletions = detail.Deletions
+		prs[i].ChangedFiles = detail.ChangedFiles
+		prs[i].Mergeable = detail.Mergeable
+		prs[i].MergeStateStatus = detail.MergeStateStatus
+		prs[i].Comments = len(detail.Comments)
+		prs[i].ReviewRequests = len(detail.ReviewRequests)
+		for _, l := range detail.Labels {
+			prs[i].Labels = append(prs[i].Labels, l.Name)
+		}
+		if t, err := time.Parse(time.RFC3339, detail.CreatedAt); err == nil {
+			prs[i].CreatedAt = t
+		}
+	}
+
+	return prs, nil
+}
+
+// enrichPRsIndividually falls back to per-PR subprocess calls when GraphQL batching fails.
+func enrichPRsIndividually(prs []model.PullRequest, results []ghSearchResult) {
+	var wg sync.WaitGroup
+	for i, r := range results {
 		wg.Add(1)
 		go func(idx int, repo, url string, num int) {
 			defer wg.Done()
@@ -304,9 +732,7 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 			}
 		}(i, r.Repository.NameWithOwner, r.URL, r.Number)
 	}
-
 	wg.Wait()
-	return prs, nil
 }
 
 func fetchPRDetailByRepo(repoOwner, repo string, number int) (*ghPRFull, error) {
