@@ -14,6 +14,11 @@ import (
 	"github.com/xxE6E6FA/nxt/model"
 )
 
+const (
+	keyEsc   = "esc"
+	keyEnter = "enter"
+)
+
 // Action represents what the user wants to do after quitting the TUI.
 type Action struct {
 	Kind string // "editor", "claude", "" (quit)
@@ -45,18 +50,18 @@ const (
 )
 
 type tuiModel struct {
-	phase   phase
-	items   []model.WorkItem
-	cursor  int
-	width   int
-	height  int
-	action  Action
+	phase     phase
+	items     []model.WorkItem
+	cursor    int
+	width     int
+	height    int
+	action    Action
 	warnings  []string
 	fetchedAt time.Time
 
 	// Config
-	editor   string // command to open folders
-	cfg      *config.Config
+	editor string // command to open folders
+	cfg    *config.Config
 
 	// Settings sub-model
 	settings settingsModel
@@ -184,7 +189,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "esc":
+	case keyEsc:
 		return m, tea.Quit
 	}
 
@@ -210,10 +215,10 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.phase = phaseSettings
 		return m, nil
 
-	case "enter", "e":
+	case keyEnter, "e":
 		// Open worktree in configured editor
 		if path := wtPath(item); path != "" {
-			c := exec.Command(m.editor, path)
+			c := exec.Command(m.editor, path) //nolint:gosec // editor command is from user config
 			return m, tea.ExecProcess(c, func(err error) tea.Msg {
 				return execDoneMsg{err}
 			})
@@ -257,11 +262,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.settings.isEditing() {
 		switch msg.String() {
-		case "enter":
+		case keyEnter:
 			m.settings.confirmEdit()
 			m.applySettings()
 			return m, nil
-		case "esc":
+		case keyEsc:
 			m.settings.cancelEdit()
 			return m, nil
 		case "backspace":
@@ -277,14 +282,14 @@ func (m tuiModel) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "esc", "q":
+	case keyEsc, "q":
 		m.phase = phaseReady
 		return m, nil
 	case "j", "down":
 		m.settings.moveDown()
 	case "k", "up":
 		m.settings.moveUp()
-	case "enter":
+	case keyEnter:
 		m.settings.startEdit()
 	}
 	return m, nil
@@ -364,7 +369,7 @@ func (m tuiModel) View() string {
 	case phaseDetail:
 		b.WriteString(m.viewDetail())
 	case phaseSettings:
-		return m.settings.view(m.width)
+		return m.settings.view()
 	default:
 		b.WriteString(m.viewList())
 	}
@@ -373,7 +378,7 @@ func (m tuiModel) View() string {
 }
 
 func (m tuiModel) viewLoading() string {
-	var parts []string
+	parts := make([]string, 0, len(m.sources))
 	for _, src := range m.sources {
 		parts = append(parts, m.renderSourceStatus(src))
 	}
@@ -394,7 +399,7 @@ func (m tuiModel) renderSourceStatus(src sourceEntry) string {
 	case StatusDone:
 		return checkStyle.Render("✓ " + src.name)
 	case StatusCached:
-		return checkStyle.Render("✓ " + src.name) + dimStyle.Render(" ·")
+		return checkStyle.Render("✓ "+src.name) + dimStyle.Render(" ·")
 	case StatusError:
 		return errStyle.Render("✗ " + src.name)
 	}
@@ -446,11 +451,12 @@ func (m tuiModel) renderItem(idx int, item model.WorkItem, selected bool) string
 
 	rankLabel := fmt.Sprintf("%2d", idx)
 	var rankStr string
-	if item.Score >= 30 {
+	switch {
+	case item.Score >= 30:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgHigh).Render(rankLabel)
-	} else if item.Score >= 15 {
+	case item.Score >= 15:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgMed).Render(rankLabel)
-	} else {
+	default:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgLow).Render(rankLabel)
 	}
 
@@ -484,8 +490,8 @@ func (m tuiModel) renderItem(idx int, item model.WorkItem, selected bool) string
 		titleMax = 20
 	}
 
-	b.WriteString(fmt.Sprintf("%s%s %s  %s\n", indicator, rankStr, idRendered,
-		lipgloss.NewStyle().Foreground(titleColor).Render(truncate(title, titleMax))))
+	fmt.Fprintf(&b, "%s%s %s  %s\n", indicator, rankStr, idRendered,
+		lipgloss.NewStyle().Foreground(titleColor).Render(truncate(title, titleMax)))
 
 	dotStr := lipgloss.NewStyle().Foreground(colorDot).Render(" · ")
 	var parts []string
@@ -524,20 +530,20 @@ func renderPRParts(pr *model.PullRequest) []string {
 	}
 
 	switch pr.CIStatus {
-	case "passing":
+	case model.CIPassing:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorPass).Render("✓ CI"))
-	case "failing":
+	case model.CIFailing:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorFail).Render("✗ CI"))
-	case "pending":
+	case model.CIPending:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorPending).Render("◎ CI"))
 	}
 
 	switch pr.ReviewState {
-	case "approved":
+	case model.ReviewApproved:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorPass).Render("✓ approved"))
-	case "changes_requested":
+	case model.ReviewChangesRequested:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorFail).Render("⚠ changes requested"))
-	case "review_required":
+	case model.ReviewRequired:
 		parts = append(parts, lipgloss.NewStyle().Foreground(colorPending).Render("◎ review needed"))
 	}
 
@@ -626,53 +632,33 @@ func (m tuiModel) viewDetail() string {
 	dimStyle := lipgloss.NewStyle().Foreground(colorStatus)
 
 	if item.Issue != nil {
-		b.WriteString(fmt.Sprintf("  %s  %s\n",
+		fmt.Fprintf(&b, "  %s  %s\n",
 			idStyle.Render(item.Issue.Identifier),
-			titleStyle.Render(item.Issue.Title)))
+			titleStyle.Render(item.Issue.Title))
 	} else if item.PR != nil {
-		b.WriteString(fmt.Sprintf("  %s  %s\n",
+		fmt.Fprintf(&b, "  %s  %s\n",
 			idStyle.Render(fmt.Sprintf("PR #%d", item.PR.Number)),
-			titleStyle.Render(item.PR.Title)))
+			titleStyle.Render(item.PR.Title))
 	}
 
 	// Score total
 	var scoreColor lipgloss.AdaptiveColor
-	if item.Score >= 30 {
+	switch {
+	case item.Score >= 30:
 		scoreColor = colorUrgHigh
-	} else if item.Score >= 15 {
+	case item.Score >= 15:
 		scoreColor = colorUrgMed
-	} else {
+	default:
 		scoreColor = colorUrgLow
 	}
 	scoreStyle := lipgloss.NewStyle().Bold(true).Foreground(scoreColor)
-	b.WriteString(fmt.Sprintf("  Score: %s\n\n", scoreStyle.Render(fmt.Sprintf("%d", item.Score))))
+	fmt.Fprintf(&b, "  Score: %s\n\n", scoreStyle.Render(fmt.Sprintf("%d", item.Score)))
 
 	// Breakdown
 	if len(item.Breakdown) == 0 {
 		b.WriteString(dimStyle.Render("  No scoring factors — base score 0") + "\n")
 	} else {
-		labelStyle := lipgloss.NewStyle().Foreground(colorTitleBright).Width(20)
-		ptsStyle := lipgloss.NewStyle().Bold(true)
-		detailStyle := lipgloss.NewStyle().Foreground(colorStatus)
-
-		for _, f := range item.Breakdown {
-			var ptsColor lipgloss.AdaptiveColor
-			if f.Points >= 25 {
-				ptsColor = colorUrgHigh
-			} else if f.Points >= 10 {
-				ptsColor = colorUrgMed
-			} else {
-				ptsColor = colorUrgLow
-			}
-
-			pts := ptsStyle.Foreground(ptsColor).Render(fmt.Sprintf("+%d", f.Points))
-			label := labelStyle.Render(f.Label)
-			line := fmt.Sprintf("  %s  %s", pts, label)
-			if f.Detail != "" {
-				line += detailStyle.Render(f.Detail)
-			}
-			b.WriteString(line + "\n")
-		}
+		renderBreakdown(&b, item.Breakdown)
 	}
 
 	// Hint
@@ -681,6 +667,32 @@ func (m tuiModel) viewDetail() string {
 	b.WriteString(hintStyle.Render("  Press any key to go back") + "\n")
 
 	return b.String()
+}
+
+func renderBreakdown(b *strings.Builder, factors []model.ScoreFactor) {
+	labelStyle := lipgloss.NewStyle().Foreground(colorTitleBright).Width(20)
+	ptsStyle := lipgloss.NewStyle().Bold(true)
+	detailStyle := lipgloss.NewStyle().Foreground(colorStatus)
+
+	for _, f := range factors {
+		var ptsColor lipgloss.AdaptiveColor
+		switch {
+		case f.Points >= 25:
+			ptsColor = colorUrgHigh
+		case f.Points >= 10:
+			ptsColor = colorUrgMed
+		default:
+			ptsColor = colorUrgLow
+		}
+
+		pts := ptsStyle.Foreground(ptsColor).Render(fmt.Sprintf("+%d", f.Points))
+		label := labelStyle.Render(f.Label)
+		line := fmt.Sprintf("  %s  %s", pts, label)
+		if f.Detail != "" {
+			line += detailStyle.Render(f.Detail)
+		}
+		b.WriteString(line + "\n")
+	}
 }
 
 func wtPath(item model.WorkItem) string {

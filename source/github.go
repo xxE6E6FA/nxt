@@ -180,15 +180,15 @@ func graphqlPRToFull(g *graphqlPRResponse) *ghPRFull {
 	}
 
 	// Convert labels
-	for _, l := range g.Labels.Nodes {
-		full.Labels = append(full.Labels, l)
-	}
+	full.Labels = append(full.Labels, g.Labels.Nodes...)
 
 	return full
 }
 
-var cachedAccounts []string
-var accountsOnce sync.Once
+var (
+	cachedAccounts []string
+	accountsOnce   sync.Once
+)
 
 func ghAccounts() []string {
 	accountsOnce.Do(func() {
@@ -273,7 +273,7 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
   }
 }`, account, prGraphQLFragment)
 
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query)
+	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query) //nolint:gosec // gh CLI path is trusted
 	cmd.Env = append(os.Environ(), "GH_TOKEN="+tok)
 
 	var stdout, stderr strings.Builder
@@ -363,37 +363,30 @@ func deriveCIStatus(checks []ciCheck) string {
 	allSuccess := true
 	for _, check := range checks {
 		s := strings.ToUpper(check.State)
-		if s == "FAILURE" || s == "ERROR" {
+		if s == model.CheckStateFailure || s == model.CheckStateError {
 			hasFailure = true
 			allSuccess = false
-		} else if s != "SUCCESS" {
+		} else if s != model.CheckStateSuccess {
 			allSuccess = false
 		}
 	}
 	if hasFailure {
-		return "failing"
+		return model.CIFailing
 	}
 	if allSuccess {
-		return "passing"
+		return model.CIPassing
 	}
-	return "pending"
+	return model.CIPending
 }
 
 func deriveReviewState(decision string) string {
 	switch decision {
 	case "APPROVED":
-		return "approved"
+		return model.ReviewApproved
 	case "CHANGES_REQUESTED":
-		return "changes_requested"
+		return model.ReviewChangesRequested
 	case "REVIEW_REQUIRED":
-		return "review_required"
+		return model.ReviewRequired
 	}
 	return ""
-}
-
-func wrapExecErr(err error) error {
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return fmt.Errorf("%s", strings.TrimSpace(string(exitErr.Stderr)))
-	}
-	return err
 }
