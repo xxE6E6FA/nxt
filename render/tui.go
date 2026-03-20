@@ -57,14 +57,15 @@ const (
 )
 
 type tuiModel struct {
-	phase     phase
-	items     []model.WorkItem
-	cursor    int
-	width     int
-	height    int
-	action    Action
-	warnings  []string
-	fetchedAt time.Time
+	phase      phase
+	items      []model.WorkItem
+	cursor     int
+	width      int
+	height     int
+	action     Action
+	warnings   []string
+	fetchedAt  time.Time
+	refreshing bool // true while a background refresh is in progress
 
 	// Config
 	editor          string // command to open folders
@@ -167,10 +168,15 @@ func (m tuiModel) scheduleRefresh() tea.Cmd {
 	})
 }
 
-// triggerRefresh resets the model to loading state and kicks off a new fetch.
+// triggerRefresh kicks off a background fetch while keeping the list visible.
+// On initial load (no items yet), falls back to the loading screen.
 func (m tuiModel) triggerRefresh() (tuiModel, tea.Cmd) {
-	m.phase = phaseLoading
-	m.sources = defaultSources()
+	if len(m.items) == 0 {
+		// First load — show spinner screen
+		m.phase = phaseLoading
+		m.sources = defaultSources()
+	}
+	m.refreshing = true
 
 	prog := m.program
 	fetchFn := m.fetchFunc
@@ -207,7 +213,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinTickMsg:
 		m.spinFrame = (m.spinFrame + 1) % len(spinFrames)
-		if m.phase == phaseLoading {
+		if m.phase == phaseLoading || m.refreshing {
 			return m, spinTick()
 		}
 		return m, nil
@@ -226,6 +232,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.items = msg.Items
 		m.warnings = msg.Warnings
 		m.fetchedAt = time.Now()
+		m.refreshing = false
 		return m, nil
 
 	case refreshTickMsg:
@@ -678,7 +685,7 @@ func (m tuiModel) renderStatusBar() string {
 	dim := lipgloss.NewStyle().Foreground(colorStatusBar)
 	warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
 
-	// Left side: item count + warnings
+	// Left side: item count + warnings + refresh status
 	var left []string
 	left = append(left, dim.Render(fmt.Sprintf("%d items", len(m.items))))
 
@@ -686,7 +693,10 @@ func (m tuiModel) renderStatusBar() string {
 		left = append(left, warnStyle.Render(fmt.Sprintf("⚠ %d warning(s)", len(m.warnings))))
 	}
 
-	if !m.fetchedAt.IsZero() {
+	if m.refreshing {
+		spinStyle := lipgloss.NewStyle().Foreground(colorSpinner)
+		left = append(left, spinStyle.Render(spinFrames[m.spinFrame]+" refreshing"))
+	} else if !m.fetchedAt.IsZero() {
 		left = append(left, dim.Render("updated "+humanDuration(time.Since(m.fetchedAt))))
 	}
 
