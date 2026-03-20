@@ -30,8 +30,20 @@ const issuesQuery = `{
         url
         priority
         dueDate
+        createdAt
+        updatedAt
+        startedAt
+        estimate
+        slaBreachesAt
+        snoozedUntilAt
+        sortOrder
+        labels { nodes { name } }
         state { name }
-        cycle { id }
+        cycle {
+          id
+          startsAt
+          endsAt
+        }
         attachments(filter: { sourceType: { eq: "github" } }) {
           nodes {
             url
@@ -47,18 +59,32 @@ type linearResponse struct {
 		Viewer struct {
 			AssignedIssues struct {
 				Nodes []struct {
-					ID         string  `json:"id"`
-					Identifier string  `json:"identifier"`
-					Title      string  `json:"title"`
-					BranchName string  `json:"branchName"`
-					URL        string  `json:"url"`
-					Priority   int     `json:"priority"`
-					DueDate    *string `json:"dueDate"`
-					State      struct {
+					ID             string   `json:"id"`
+					Identifier     string   `json:"identifier"`
+					Title          string   `json:"title"`
+					BranchName     string   `json:"branchName"`
+					URL            string   `json:"url"`
+					Priority       int      `json:"priority"`
+					DueDate        *string  `json:"dueDate"`
+					CreatedAt      string   `json:"createdAt"`
+					UpdatedAt      string   `json:"updatedAt"`
+					StartedAt      *string  `json:"startedAt"`
+					Estimate       *float64 `json:"estimate"`
+					SLABreachesAt  *string  `json:"slaBreachesAt"`
+					SnoozedUntilAt *string  `json:"snoozedUntilAt"`
+					SortOrder      float64  `json:"sortOrder"`
+					Labels         struct {
+						Nodes []struct {
+							Name string `json:"name"`
+						} `json:"nodes"`
+					} `json:"labels"`
+					State struct {
 						Name string `json:"name"`
 					} `json:"state"`
 					Cycle *struct {
-						ID string `json:"id"`
+						ID       string  `json:"id"`
+						StartsAt *string `json:"startsAt"`
+						EndsAt   *string `json:"endsAt"`
 					} `json:"cycle"`
 					Attachments struct {
 						Nodes []struct {
@@ -122,6 +148,8 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 			Priority:   n.Priority,
 			BranchName: n.BranchName,
 			URL:        n.URL,
+			Estimate:   n.Estimate,
+			SortOrder:  n.SortOrder,
 		}
 		if n.DueDate != nil {
 			t, err := time.Parse("2006-01-02", *n.DueDate)
@@ -129,9 +157,43 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 				issue.DueDate = &t
 			}
 		}
+		if t, err := time.Parse(time.RFC3339, n.CreatedAt); err == nil {
+			issue.CreatedAt = t
+		}
+		if t, err := time.Parse(time.RFC3339, n.UpdatedAt); err == nil {
+			issue.UpdatedAt = t
+		}
+		if n.StartedAt != nil {
+			if t, err := time.Parse(time.RFC3339, *n.StartedAt); err == nil {
+				issue.StartedAt = &t
+			}
+		}
+		if n.SLABreachesAt != nil {
+			if t, err := time.Parse(time.RFC3339, *n.SLABreachesAt); err == nil {
+				issue.SLABreachesAt = &t
+			}
+		}
+		if n.SnoozedUntilAt != nil {
+			if t, err := time.Parse(time.RFC3339, *n.SnoozedUntilAt); err == nil {
+				issue.SnoozedUntilAt = &t
+			}
+		}
+		for _, l := range n.Labels.Nodes {
+			issue.Labels = append(issue.Labels, l.Name)
+		}
 		if n.Cycle != nil {
 			issue.CycleID = n.Cycle.ID
 			issue.InCycle = true
+			if n.Cycle.StartsAt != nil {
+				if t, err := time.Parse("2006-01-02", *n.Cycle.StartsAt); err == nil {
+					issue.CycleStartDate = &t
+				}
+			}
+			if n.Cycle.EndsAt != nil {
+				if t, err := time.Parse("2006-01-02", *n.Cycle.EndsAt); err == nil {
+					issue.CycleEndDate = &t
+				}
+			}
 		}
 		for _, att := range n.Attachments.Nodes {
 			if att.URL != "" {

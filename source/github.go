@@ -30,20 +30,38 @@ type ciCheck struct {
 	State string `json:"state"`
 }
 
-type ghPRFull struct {
-	Number            int       `json:"number"`
-	Title             string    `json:"title"`
-	HeadRefName       string    `json:"headRefName"`
-	URL               string    `json:"url"`
-	State             string    `json:"state"`
-	IsDraft           bool      `json:"isDraft"`
-	Body              string    `json:"body"`
-	UpdatedAt         string    `json:"updatedAt"`
-	ReviewDecision    string    `json:"reviewDecision"`
-	StatusCheckRollup []ciCheck `json:"statusCheckRollup"`
+type ghLabel struct {
+	Name string `json:"name"`
 }
 
-const prViewFields = "number,title,headRefName,url,state,isDraft,body,updatedAt,reviewDecision,statusCheckRollup"
+type ghReviewRequest struct {
+	Login string `json:"login"`
+	Slug  string `json:"slug"`
+}
+
+type ghPRFull struct {
+	Number            int               `json:"number"`
+	Title             string            `json:"title"`
+	HeadRefName       string            `json:"headRefName"`
+	URL               string            `json:"url"`
+	State             string            `json:"state"`
+	IsDraft           bool              `json:"isDraft"`
+	Body              string            `json:"body"`
+	CreatedAt         string            `json:"createdAt"`
+	UpdatedAt         string            `json:"updatedAt"`
+	Additions         int               `json:"additions"`
+	Deletions         int               `json:"deletions"`
+	ChangedFiles      int               `json:"changedFiles"`
+	Mergeable         string            `json:"mergeable"`
+	MergeStateStatus  string            `json:"mergeStateStatus"`
+	ReviewDecision    string            `json:"reviewDecision"`
+	StatusCheckRollup []ciCheck         `json:"statusCheckRollup"`
+	Comments          []json.RawMessage `json:"comments"`
+	ReviewRequests    []ghReviewRequest `json:"reviewRequests"`
+	Labels            []ghLabel         `json:"labels"`
+}
+
+const prViewFields = "number,title,headRefName,url,state,isDraft,body,createdAt,updatedAt,additions,deletions,changedFiles,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,comments,reviewRequests,labels"
 
 // ghAccountTokens caches resolved tokens per GitHub account.
 var ghAccountTokens = map[string]string{}
@@ -271,6 +289,19 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 			prs[idx].HeadBranch = detail.HeadRefName
 			prs[idx].CIStatus = deriveCIStatus(detail.StatusCheckRollup)
 			prs[idx].ReviewState = deriveReviewState(detail.ReviewDecision)
+			prs[idx].Additions = detail.Additions
+			prs[idx].Deletions = detail.Deletions
+			prs[idx].ChangedFiles = detail.ChangedFiles
+			prs[idx].Mergeable = detail.Mergeable
+			prs[idx].MergeStateStatus = detail.MergeStateStatus
+			prs[idx].Comments = len(detail.Comments)
+			prs[idx].ReviewRequests = len(detail.ReviewRequests)
+			for _, l := range detail.Labels {
+				prs[idx].Labels = append(prs[idx].Labels, l.Name)
+			}
+			if t, err := time.Parse(time.RFC3339, detail.CreatedAt); err == nil {
+				prs[idx].CreatedAt = t
+			}
 		}(i, r.Repository.NameWithOwner, r.URL, r.Number)
 	}
 
@@ -299,15 +330,26 @@ func fetchPRDetailByRepo(repoOwner, repo string, number int) (*ghPRFull, error) 
 
 func fullToPR(g *ghPRFull, originalURL string) *model.PullRequest {
 	pr := &model.PullRequest{
-		Number:      g.Number,
-		Title:       g.Title,
-		HeadBranch:  g.HeadRefName,
-		URL:         g.URL,
-		State:       g.State,
-		IsDraft:     g.IsDraft,
-		Body:        g.Body,
-		CIStatus:    deriveCIStatus(g.StatusCheckRollup),
-		ReviewState: deriveReviewState(g.ReviewDecision),
+		Number:           g.Number,
+		Title:            g.Title,
+		HeadBranch:       g.HeadRefName,
+		URL:              g.URL,
+		State:            g.State,
+		IsDraft:          g.IsDraft,
+		Body:             g.Body,
+		CIStatus:         deriveCIStatus(g.StatusCheckRollup),
+		ReviewState:      deriveReviewState(g.ReviewDecision),
+		Additions:        g.Additions,
+		Deletions:        g.Deletions,
+		ChangedFiles:     g.ChangedFiles,
+		Mergeable:        g.Mergeable,
+		MergeStateStatus: g.MergeStateStatus,
+		Comments:         len(g.Comments),
+		ReviewRequests:   len(g.ReviewRequests),
+	}
+
+	for _, l := range g.Labels {
+		pr.Labels = append(pr.Labels, l.Name)
 	}
 
 	if pr.Repo == "" {
@@ -315,6 +357,9 @@ func fullToPR(g *ghPRFull, originalURL string) *model.PullRequest {
 	}
 	if pr.URL == "" {
 		pr.URL = originalURL
+	}
+	if t, err := time.Parse(time.RFC3339, g.CreatedAt); err == nil {
+		pr.CreatedAt = t
 	}
 	if t, err := time.Parse(time.RFC3339, g.UpdatedAt); err == nil {
 		pr.UpdatedAt = t
