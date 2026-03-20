@@ -10,3 +10,9 @@ pre-commit:
     test-short:
       glob: "*.go"
       run: go test -short ./...
+
+post-commit:
+  commands:
+    install:
+      glob: "*.go"
+      run: make install
