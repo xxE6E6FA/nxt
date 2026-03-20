@@ -104,13 +104,19 @@ type linearResponse struct {
 }
 
 // FetchLinearIssues retrieves issues assigned to the authenticated user.
-func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
+// An optional apiURL overrides the default Linear API endpoint (used for testing).
+func FetchLinearIssues(apiKey string, apiURL ...string) ([]model.LinearIssue, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("linear API key not configured")
 	}
 
+	endpoint := linearAPI
+	if len(apiURL) > 0 && apiURL[0] != "" {
+		endpoint = apiURL[0]
+	}
+
 	body, _ := json.Marshal(map[string]string{"query": issuesQuery})
-	req, err := http.NewRequest("POST", linearAPI, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

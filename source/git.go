@@ -74,8 +74,11 @@ func repoSlugFromRemote(repoRoot string) string {
 	if err != nil {
 		return ""
 	}
-	url := strings.TrimSpace(string(out))
+	return extractSlugFromURL(strings.TrimSpace(string(out)))
+}
 
+// extractSlugFromURL parses an "owner/name" slug from a git remote URL.
+func extractSlugFromURL(url string) string {
 	// Handle SSH: git@host:owner/name.git (contains "@" before ":")
 	if strings.Contains(url, "@") {
 		if idx := strings.Index(url, ":"); idx >= 0 {
@@ -156,21 +159,18 @@ func findGitRepos(dir string, maxDepth int) []string {
 	return repos
 }
 
-func listWorktrees(repoRoot string) ([]model.Worktree, error) {
-	cmd := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
+// rawEntry holds a parsed worktree path and branch from porcelain output.
+type rawEntry struct {
+	path   string
+	branch string
+}
 
-	type rawEntry struct {
-		path   string
-		branch string
-	}
+// parseWorktreeLines parses `git worktree list --porcelain` output into entries.
+func parseWorktreeLines(out string) []rawEntry {
 	var entries []rawEntry
 	var current rawEntry
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			if current.path != "" {
@@ -189,6 +189,17 @@ func listWorktrees(repoRoot string) ([]model.Worktree, error) {
 	if current.path != "" {
 		entries = append(entries, current)
 	}
+	return entries
+}
+
+func listWorktrees(repoRoot string) ([]model.Worktree, error) {
+	cmd := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	entries := parseWorktreeLines(string(out))
 
 	// Track which branches are already covered by a worktree checkout
 	wtBranches := make(map[string]bool)
