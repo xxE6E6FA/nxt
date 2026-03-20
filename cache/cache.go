@@ -115,5 +115,20 @@ func Set(key string, value interface{}) error {
 		return err
 	}
 
-	return os.WriteFile(cachePath(key), buf, 0o600)
+	// Atomic write: temp file + rename to prevent corruption on crash
+	tmpFile, err := os.CreateTemp(dir, ".nxt-cache-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(buf); err != nil {
+		tmpFile.Close()    //nolint:gosec // best-effort cleanup
+		os.Remove(tmpPath) //nolint:gosec // best-effort cleanup
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath) //nolint:gosec // best-effort cleanup
+		return err
+	}
+	return os.Rename(tmpPath, cachePath(key))
 }
