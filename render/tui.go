@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -274,7 +275,7 @@ func (m tuiModel) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		default:
 			// Type printable characters
-			if len(msg.String()) == 1 || msg.String() == " " {
+			if utf8.RuneCountInString(msg.String()) == 1 {
 				m.settings.typeChar(msg.String())
 			}
 			return m, nil

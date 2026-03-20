@@ -3,6 +3,7 @@ package linker
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/xxE6E6FA/nxt/model"
 )
@@ -16,7 +17,6 @@ func containsWord(text, word string) bool {
 	}
 	tl := strings.ToLower(text)
 	wl := strings.ToLower(word)
-	wLen := len(wl)
 
 	for i := 0; ; {
 		idx := strings.Index(tl[i:], wl)
@@ -24,9 +24,23 @@ func containsWord(text, word string) bool {
 			return false
 		}
 		pos := i + idx
-		start := pos == 0 || !isAlnum(rune(tl[pos-1]))
-		end := pos+wLen == len(tl) || !isAlnum(rune(tl[pos+wLen]))
-		if start && end {
+		endPos := pos + len(wl)
+
+		// Check start boundary: at start of string or preceded by non-alnum rune
+		startOK := pos == 0
+		if !startOK {
+			r, _ := utf8.DecodeLastRuneInString(tl[:pos])
+			startOK = !isAlnum(r)
+		}
+
+		// Check end boundary: at end of string or followed by non-alnum rune
+		endOK := endPos == len(tl)
+		if !endOK {
+			r, _ := utf8.DecodeRuneInString(tl[endPos:])
+			endOK = !isAlnum(r)
+		}
+
+		if startOK && endOK {
 			return true
 		}
 		i = pos + 1
@@ -37,12 +51,18 @@ func isAlnum(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
+// wtKey returns a unique key for a worktree, combining path and branch
+// so that virtual worktrees sharing the same repo root are distinguished.
+func wtKey(wt *model.Worktree) string {
+	return wt.Path + "\x00" + wt.Branch
+}
+
 // Link correlates Linear issues with worktrees and PRs, producing WorkItems.
 // Issues are the primary axis — each issue becomes a WorkItem.
 // PRs and worktrees not matched to any issue are added as standalone items.
 // repoMap maps "owner/name" → local repo root path for fallback linking via PR repo.
 func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model.Worktree, repoMap map[string]string) []model.WorkItem {
-	prUsed := make(map[int]bool)
+	prUsed := make(map[string]bool)
 	wtUsed := make(map[string]bool)
 
 	var items []model.WorkItem
@@ -59,7 +79,7 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 			}
 			if matchBranch(issue, wt.Branch) {
 				item.Worktree = wt
-				wtUsed[wt.Path] = true
+				wtUsed[wtKey(wt)] = true
 				break
 			}
 		}
@@ -69,7 +89,7 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 			pr := &prs[j]
 			if matchPR(issue, pr) {
 				item.PR = pr
-				prUsed[pr.Number] = true
+				prUsed[pr.URL] = true
 				break
 			}
 		}
@@ -93,18 +113,18 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 	// same branch. One branch → one folder — no cross-repo leaking.
 	for i := range prs {
 		pr := &prs[i]
-		if prUsed[pr.Number] || pr.HeadBranch == "" {
+		if prUsed[pr.URL] || pr.HeadBranch == "" {
 			continue
 		}
 		for j := range worktrees {
 			wt := &worktrees[j]
-			if wt.IsMain || wtUsed[wt.Path] {
+			if wt.IsMain || wtUsed[wtKey(wt)] {
 				continue
 			}
 			if strings.EqualFold(wt.Branch, pr.HeadBranch) {
 				item := model.WorkItem{PR: pr, Worktree: wt}
 				items = append(items, item)
-				wtUsed[wt.Path] = true
+				wtUsed[wtKey(wt)] = true
 				break
 			}
 		}

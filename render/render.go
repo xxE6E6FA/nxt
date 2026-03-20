@@ -135,13 +135,14 @@ func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return s
 	}
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 1 {
 		return "…"
 	}
-	return s[:maxLen-1] + "…"
+	return string(runes[:maxLen-1]) + "…"
 }
 
 func humanDuration(d time.Duration) string {

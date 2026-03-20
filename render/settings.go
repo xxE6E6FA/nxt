@@ -72,7 +72,8 @@ func (s *settingsModel) typeChar(ch string) {
 func (s *settingsModel) backspace() {
 	f := &s.fields[s.cursor]
 	if f.editing && f.editBuf != "" {
-		f.editBuf = f.editBuf[:len(f.editBuf)-1]
+		runes := []rune(f.editBuf)
+		f.editBuf = string(runes[:len(runes)-1])
 	}
 }
 
