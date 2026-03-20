@@ -47,8 +47,6 @@ nxt fetches from three sources concurrently — Linear (assigned issues), GitHub
 
 The scoring algorithm prioritizes **action-required** over raw importance: CI failing, changes requested, and merge conflicts score highest. Items that are almost done (approved + CI green) bubble up because the cost of finishing is tiny and the cost of forgetting is high. Staleness accrues over time. Priority and cycle context act as multipliers — they amplify urgency but don't create it. Items snoozed in Linear are scored at zero.
 
-See [scorer/SCORING.md](scorer/SCORING.md) for the full algorithm.
-
 Responses are cached with stale-while-revalidate — stale data is served immediately while a background refresh runs. Bypass with `--no-cache`.
 
 ## Configuration
