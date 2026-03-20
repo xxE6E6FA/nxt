@@ -1,6 +1,7 @@
 package scorer
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/xxE6E6FA/nxt/model"
@@ -10,20 +11,26 @@ import (
 func Score(items []model.WorkItem) {
 	now := time.Now()
 	for i := range items {
-		items[i].Score = scoreItem(&items[i], now)
+		items[i].Score, items[i].Breakdown = scoreItem(&items[i], now)
 	}
 }
 
-func scoreItem(item *model.WorkItem, now time.Time) int {
+func scoreItem(item *model.WorkItem, now time.Time) (int, []model.ScoreFactor) {
 	score := 0
+	var factors []model.ScoreFactor
+
+	add := func(label string, points int, detail string) {
+		score += points
+		factors = append(factors, model.ScoreFactor{Label: label, Points: points, Detail: detail})
+	}
 
 	// PR-based signals
 	if pr := item.PR; pr != nil {
 		if pr.CIStatus == "failing" {
-			score += 40
+			add("CI failing", 40, fmt.Sprintf("PR #%d has failing checks", pr.Number))
 		}
 		if pr.ReviewState == "changes_requested" {
-			score += 35
+			add("Changes requested", 35, fmt.Sprintf("PR #%d needs revision", pr.Number))
 		}
 	}
 
@@ -33,32 +40,39 @@ func scoreItem(item *model.WorkItem, now time.Time) int {
 		if issue.DueDate != nil {
 			daysUntil := issue.DueDate.Sub(now).Hours() / 24
 			if daysUntil <= 7 {
+				var pts int
+				var detail string
 				if daysUntil <= 0 {
-					score += 30 // overdue
+					pts = 30
+					detail = fmt.Sprintf("Overdue by %d days", int(-daysUntil))
 				} else {
-					score += int(30 * (1 - daysUntil/7))
+					pts = int(30 * (1 - daysUntil/7))
+					detail = fmt.Sprintf("Due in %d days", int(daysUntil))
+				}
+				if pts > 0 {
+					add("Deadline", pts, detail)
 				}
 			}
 		}
 
 		// Priority
 		switch issue.Priority {
-		case 1: // urgent
-			score += 25
-		case 2: // high
-			score += 15
-		case 3: // medium
-			score += 5
+		case 1:
+			add("Urgent priority", 25, "Linear priority: Urgent")
+		case 2:
+			add("High priority", 15, "Linear priority: High")
+		case 3:
+			add("Medium priority", 5, "Linear priority: Medium")
 		}
 
 		// In current cycle
 		if issue.InCycle {
-			score += 10
+			add("In cycle", 10, "Part of the current sprint/cycle")
 		}
 
 		// No branch/worktree yet
 		if item.Worktree == nil && item.PR == nil {
-			score += 8
+			add("No branch yet", 8, "No worktree or PR — needs to be started")
 		}
 	}
 
@@ -70,9 +84,11 @@ func scoreItem(item *model.WorkItem, now time.Time) int {
 			if staleScore > 20 {
 				staleScore = 20
 			}
-			score += staleScore
+			if staleScore > 0 {
+				add("Stale branch", staleScore, fmt.Sprintf("Last commit %d days ago", int(daysSince)))
+			}
 		}
 	}
 
-	return score
+	return score, factors
 }
