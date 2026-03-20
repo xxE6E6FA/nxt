@@ -48,8 +48,16 @@ func main() {
 			prs         []model.PullRequest
 			authoredPRs []model.PullRequest
 			scanRes     source.ScanResult
-			warnings    []string
+
+			warnMu   sync.Mutex
+			warnings []string
 		)
+
+		addWarning := func(msg string) {
+			warnMu.Lock()
+			warnings = append(warnings, msg)
+			warnMu.Unlock()
+		}
 
 		// Phase 1: Linear + worktrees + authored PRs in parallel
 		g := new(errgroup.Group)
@@ -58,18 +66,18 @@ func main() {
 			notifySource(updateSource, "Linear", render.StatusLoading)
 			if !flags.NoCache {
 				if served := serveCached("linear", &issues, cache.LinearTTL, updateSource, "Linear", func() {
-					fetched, err := source.FetchLinearIssues(cfg.Linear.APIKey)
-					if err == nil {
+					fetched, fetchErr := source.FetchLinearIssues(cfg.Linear.APIKey)
+					if fetchErr == nil {
 						_ = cache.Set("linear", fetched)
 					}
 				}); served {
 					return nil
 				}
 			}
-			var err error
-			issues, err = source.FetchLinearIssues(cfg.Linear.APIKey)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("linear: %v", err))
+			var fetchErr error
+			issues, fetchErr = source.FetchLinearIssues(cfg.Linear.APIKey)
+			if fetchErr != nil {
+				addWarning(fmt.Sprintf("linear: %v", fetchErr))
 				notifySource(updateSource, "Linear", render.StatusError)
 				return nil
 			}
@@ -86,18 +94,18 @@ func main() {
 			}
 			if !flags.NoCache {
 				if served := serveCached("worktrees", &scanRes, cache.WorktreesTTL, updateSource, "Worktrees", func() {
-					fetched, err := source.ScanWorktrees(cfg.Local.BaseDirs)
-					if err == nil {
+					fetched, fetchErr := source.ScanWorktrees(cfg.Local.BaseDirs)
+					if fetchErr == nil {
 						_ = cache.Set("worktrees", fetched)
 					}
 				}); served {
 					return nil
 				}
 			}
-			var err error
-			scanRes, err = source.ScanWorktrees(cfg.Local.BaseDirs)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("git: %v", err))
+			var fetchErr error
+			scanRes, fetchErr = source.ScanWorktrees(cfg.Local.BaseDirs)
+			if fetchErr != nil {
+				addWarning(fmt.Sprintf("git: %v", fetchErr))
 				notifySource(updateSource, "Worktrees", render.StatusError)
 				return nil
 			}
@@ -118,15 +126,13 @@ func main() {
 		}
 
 		// Start authored PR search in parallel — doesn't need Linear data
+		var ghErr error
 		if githubCacheState == 0 {
-			if updateSource != nil {
-				updateSource("GitHub", render.StatusLoading)
-			}
+			notifySource(updateSource, "GitHub", render.StatusLoading)
 			g.Go(func() error {
-				var err error
-				authoredPRs, err = source.FetchAuthoredPRs()
-				if err != nil {
-					warnings = append(warnings, fmt.Sprintf("github authored: %v", err))
+				authoredPRs, ghErr = source.FetchAuthoredPRs()
+				if ghErr != nil {
+					addWarning(fmt.Sprintf("github authored: %v", ghErr))
 				}
 				return nil
 			})
@@ -137,30 +143,28 @@ func main() {
 		// Phase 2: Fetch Linear-linked PRs (needs Linear data) and merge
 		switch githubCacheState {
 		case 1: // fresh cache hit
-			if updateSource != nil {
-				updateSource("GitHub", render.StatusCached)
-			}
+			notifySource(updateSource, "GitHub", render.StatusCached)
 		case 2: // stale — serve cached data, revalidate in background
-			if updateSource != nil {
-				updateSource("GitHub", render.StatusCached)
-			}
+			notifySource(updateSource, "GitHub", render.StatusCached)
 			go func() {
-				authored, _ := source.FetchAuthoredPRs()
-				_ = cache.Set("github", authored)
+				authored, fetchErr := source.FetchAuthoredPRs()
+				if fetchErr == nil {
+					_ = cache.Set("github", authored)
+				}
 			}()
 		default: // cache miss — fetch synchronously
 			// Authored PR search already covers all open PRs by the user.
 			// Linked PR URLs from Linear are used only for matching (by the linker),
 			// not for fetching — teammate PRs on shared issues are skipped entirely.
 			prs = authoredPRs
-			if err != nil {
-				if updateSource != nil {
-					updateSource("GitHub", render.StatusError)
-				}
-			} else if updateSource != nil {
-				updateSource("GitHub", render.StatusDone)
+			if ghErr != nil {
+				notifySource(updateSource, "GitHub", render.StatusError)
+			} else {
+				notifySource(updateSource, "GitHub", render.StatusDone)
 			}
-			_ = cache.Set("github", prs)
+			if ghErr == nil {
+				_ = cache.Set("github", prs)
+			}
 		}
 
 		items := linker.Link(issues, prs, scanRes.Worktrees, scanRes.RepoMap)
