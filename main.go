@@ -51,9 +51,18 @@ func main() {
 				updateSource("Linear", render.StatusLoading)
 			}
 			if !flags.NoCache {
-				if cache.GetWithTTL("linear", &issues, cache.LinearTTL) {
+				hit, stale := cache.GetStale("linear", &issues, cache.LinearTTL, cache.StaleTTL)
+				if hit {
 					if updateSource != nil {
 						updateSource("Linear", render.StatusCached)
+					}
+					if stale {
+						go func() {
+							fetched, err := source.FetchLinearIssues(cfg.Linear.APIKey)
+							if err == nil {
+								_ = cache.Set("linear", fetched)
+							}
+						}()
 					}
 					return nil
 				}
@@ -85,9 +94,18 @@ func main() {
 				return nil
 			}
 			if !flags.NoCache {
-				if cache.GetWithTTL("worktrees", &scanRes, cache.WorktreesTTL) {
+				hit, stale := cache.GetStale("worktrees", &scanRes, cache.WorktreesTTL, cache.StaleTTL)
+				if hit {
 					if updateSource != nil {
 						updateSource("Worktrees", render.StatusCached)
+					}
+					if stale {
+						go func() {
+							fetched, err := source.ScanWorktrees(cfg.Local.BaseDirs)
+							if err == nil {
+								_ = cache.Set("worktrees", fetched)
+							}
+						}()
 					}
 					return nil
 				}
@@ -108,9 +126,19 @@ func main() {
 			return nil
 		})
 
+		// Check GitHub cache — stale-while-revalidate aware
+		var githubCacheState int // 0=miss, 1=fresh, 2=stale
+		if !flags.NoCache {
+			hit, stale := cache.GetStale("github", &prs, cache.GitHubTTL, cache.StaleTTL)
+			if hit && !stale {
+				githubCacheState = 1
+			} else if hit && stale {
+				githubCacheState = 2
+			}
+		}
+
 		// Start authored PR search in parallel — doesn't need Linear data
-		githubCached := !flags.NoCache && cache.GetWithTTL("github", &prs, cache.GitHubTTL)
-		if !githubCached {
+		if githubCacheState == 0 {
 			if updateSource != nil {
 				updateSource("GitHub", render.StatusLoading)
 			}
@@ -127,11 +155,25 @@ func main() {
 		_ = g.Wait()
 
 		// Phase 2: Fetch Linear-linked PRs (needs Linear data) and merge
-		if githubCached {
+		switch githubCacheState {
+		case 1: // fresh cache hit
 			if updateSource != nil {
 				updateSource("GitHub", render.StatusCached)
 			}
-		} else {
+		case 2: // stale — serve cached data, revalidate in background
+			if updateSource != nil {
+				updateSource("GitHub", render.StatusCached)
+			}
+			go func() {
+				var prURLs []string
+				for _, issue := range issues {
+					prURLs = append(prURLs, issue.PRURLs...)
+				}
+				authored, _ := source.FetchAuthoredPRs()
+				linked, _ := source.FetchLinkedPRs(prURLs)
+				_ = cache.Set("github", source.MergePRs(authored, linked))
+			}()
+		default: // cache miss — fetch synchronously
 			var prURLs []string
 			for _, issue := range issues {
 				prURLs = append(prURLs, issue.PRURLs...)

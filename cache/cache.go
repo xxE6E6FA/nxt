@@ -57,6 +57,42 @@ func GetWithTTL(key string, dest interface{}, ttl time.Duration) bool {
 	return json.Unmarshal(e.Data, dest) == nil
 }
 
+// StaleTTL is the maximum age for serving stale data while revalidating.
+const StaleTTL = 10 * time.Minute
+
+// GetStale retrieves a cached value with two-tier freshness.
+// Returns (hit, stale):
+//   - (true, false) if data is within freshTTL — fresh hit
+//   - (true, true)  if data is between freshTTL and staleTTL — stale hit, caller should revalidate
+//   - (false, false) if data is beyond staleTTL or missing — full miss
+func GetStale(key string, dest interface{}, freshTTL, staleTTL time.Duration) (hit bool, stale bool) {
+	data, err := os.ReadFile(cachePath(key))
+	if err != nil {
+		return false, false
+	}
+
+	var e entry
+	if err := json.Unmarshal(data, &e); err != nil {
+		return false, false
+	}
+
+	age := time.Since(e.CachedAt)
+
+	if age > staleTTL {
+		return false, false
+	}
+
+	if err := json.Unmarshal(e.Data, dest); err != nil {
+		return false, false
+	}
+
+	if age > freshTTL {
+		return true, true
+	}
+
+	return true, false
+}
+
 // Set stores a value in the cache.
 func Set(key string, value interface{}) error {
 	data, err := json.Marshal(value)
