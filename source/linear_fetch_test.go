@@ -74,8 +74,8 @@ func TestFetchLinearIssuesWithHTTPTest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify auth header
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer test-key" {
-			t.Errorf("Authorization = %q, want %q", auth, "Bearer test-key")
+		if auth != "test-key" {
+			t.Errorf("Authorization = %q, want %q", auth, "test-key")
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
@@ -192,11 +192,11 @@ func TestFetchLinearIssuesHTTPError(t *testing.T) {
 	}
 }
 
-func TestFetchLinearIssuesBearerPrefix(t *testing.T) {
+func TestFetchLinearIssuesStripsBearerPrefix(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer already-prefixed" {
-			t.Errorf("Authorization = %q, want %q", auth, "Bearer already-prefixed")
+		if auth != "already-prefixed" {
+			t.Errorf("Authorization = %q, want %q (Bearer should be stripped)", auth, "already-prefixed")
 		}
 		w.WriteHeader(200)
 		w.Write([]byte(`{"data":{"viewer":{"assignedIssues":{"nodes":[]}}}}`)) //nolint:errcheck

@@ -121,10 +121,9 @@ func FetchLinearIssues(apiKey string, apiURL ...string) ([]model.LinearIssue, er
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// RFC 6750: Linear accepts bare tokens but Bearer prefix is correct.
-	if !strings.HasPrefix(apiKey, "Bearer ") {
-		apiKey = "Bearer " + apiKey
-	}
+	// Linear API keys are sent as bare tokens — no Bearer prefix.
+	// If someone stored "Bearer <key>" strip the prefix.
+	apiKey = strings.TrimPrefix(apiKey, "Bearer ")
 	req.Header.Set("Authorization", apiKey)
 
 	resp, err := httpClient.Do(req)
