@@ -9,11 +9,11 @@ import (
 
 // settingsField represents one editable config field.
 type settingsField struct {
-	label    string
-	key      string // config key for saving
-	value    string
-	editing  bool
-	editBuf  string
+	label   string
+	key     string // config key for saving
+	value   string
+	editing bool
+	editBuf string
 }
 
 type settingsModel struct {
@@ -71,7 +71,7 @@ func (s *settingsModel) typeChar(ch string) {
 
 func (s *settingsModel) backspace() {
 	f := &s.fields[s.cursor]
-	if f.editing && len(f.editBuf) > 0 {
+	if f.editing && f.editBuf != "" {
 		f.editBuf = f.editBuf[:len(f.editBuf)-1]
 	}
 }
@@ -80,7 +80,7 @@ func (s *settingsModel) isEditing() bool {
 	return s.fields[s.cursor].editing
 }
 
-func (s *settingsModel) view(width int) string {
+func (s *settingsModel) view() string {
 	var b strings.Builder
 
 	headerStyle := lipgloss.NewStyle().Foreground(colorHeader)
@@ -110,7 +110,7 @@ func (s *settingsModel) view(width int) string {
 			}
 		}
 
-		b.WriteString(fmt.Sprintf("%s%s  %s\n\n", indicator, label, val))
+		fmt.Fprintf(&b, "%s%s  %s\n\n", indicator, label, val)
 	}
 
 	// Help

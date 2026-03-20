@@ -21,13 +21,13 @@ var (
 	colorUrgLow  = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#6b7280"}
 
 	// Text
-	colorTitle      = lipgloss.AdaptiveColor{Light: "#374151", Dark: "#94a3b8"}
+	colorTitle       = lipgloss.AdaptiveColor{Light: "#374151", Dark: "#94a3b8"}
 	colorTitleBright = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#f1f5f9"}
-	colorIssueID    = lipgloss.AdaptiveColor{Light: "#1f2937", Dark: "#e2e8f0"}
-	colorIssueIDSel = lipgloss.AdaptiveColor{Light: "#000000", Dark: "#f1f5f9"}
-	colorStatus     = lipgloss.AdaptiveColor{Light: "#6b7280", Dark: "#64748b"}
-	colorPath       = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#475569"}
-	colorTime       = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#475569"}
+	colorIssueID     = lipgloss.AdaptiveColor{Light: "#1f2937", Dark: "#e2e8f0"}
+	colorIssueIDSel  = lipgloss.AdaptiveColor{Light: "#000000", Dark: "#f1f5f9"}
+	colorStatus      = lipgloss.AdaptiveColor{Light: "#6b7280", Dark: "#64748b"}
+	colorPath        = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#475569"}
+	colorTime        = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#475569"}
 
 	// PR
 	colorPR    = lipgloss.AdaptiveColor{Light: "#4f46e5", Dark: "#818cf8"}

@@ -184,16 +184,8 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 		if n.Cycle != nil {
 			issue.CycleID = n.Cycle.ID
 			issue.InCycle = true
-			if n.Cycle.StartsAt != nil {
-				if t, err := time.Parse("2006-01-02", *n.Cycle.StartsAt); err == nil {
-					issue.CycleStartDate = &t
-				}
-			}
-			if n.Cycle.EndsAt != nil {
-				if t, err := time.Parse("2006-01-02", *n.Cycle.EndsAt); err == nil {
-					issue.CycleEndDate = &t
-				}
-			}
+			issue.CycleStartDate = parseDatePtr("2006-01-02", n.Cycle.StartsAt)
+			issue.CycleEndDate = parseDatePtr("2006-01-02", n.Cycle.EndsAt)
 		}
 		for _, att := range n.Attachments.Nodes {
 			if att.URL != "" {
@@ -204,4 +196,16 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 	}
 
 	return issues, nil
+}
+
+// parseDatePtr parses a date string pointer, returning nil on nil input or parse error.
+func parseDatePtr(layout string, s *string) *time.Time {
+	if s == nil {
+		return nil
+	}
+	t, err := time.Parse(layout, *s)
+	if err != nil {
+		return nil
+	}
+	return &t
 }

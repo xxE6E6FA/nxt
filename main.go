@@ -33,7 +33,7 @@ func main() {
 
 	setup.EnsureSetup(cfg, flags.Setup)
 
-	interactive := !flags.JSON && !flags.Debug && term.IsTerminal(int(os.Stdout.Fd()))
+	interactive := !flags.JSON && !flags.Debug && term.IsTerminal(int(os.Stdout.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
 
 	// Benchmark mode: fetch everything with no cache, print timings, exit.
 	if flags.Benchmark {
@@ -55,23 +55,14 @@ func main() {
 		g := new(errgroup.Group)
 
 		g.Go(func() error {
-			if updateSource != nil {
-				updateSource("Linear", render.StatusLoading)
-			}
+			notifySource(updateSource, "Linear", render.StatusLoading)
 			if !flags.NoCache {
-				hit, stale := cache.GetStale("linear", &issues, cache.LinearTTL, cache.StaleTTL)
-				if hit {
-					if updateSource != nil {
-						updateSource("Linear", render.StatusCached)
+				if served := serveCached("linear", &issues, cache.LinearTTL, updateSource, "Linear", func() {
+					fetched, err := source.FetchLinearIssues(cfg.Linear.APIKey)
+					if err == nil {
+						_ = cache.Set("linear", fetched)
 					}
-					if stale {
-						go func() {
-							fetched, err := source.FetchLinearIssues(cfg.Linear.APIKey)
-							if err == nil {
-								_ = cache.Set("linear", fetched)
-							}
-						}()
-					}
+				}); served {
 					return nil
 				}
 			}
@@ -79,42 +70,27 @@ func main() {
 			issues, err = source.FetchLinearIssues(cfg.Linear.APIKey)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("linear: %v", err))
-				if updateSource != nil {
-					updateSource("Linear", render.StatusError)
-				}
+				notifySource(updateSource, "Linear", render.StatusError)
 				return nil
 			}
 			_ = cache.Set("linear", issues)
-			if updateSource != nil {
-				updateSource("Linear", render.StatusDone)
-			}
+			notifySource(updateSource, "Linear", render.StatusDone)
 			return nil
 		})
 
 		g.Go(func() error {
-			if updateSource != nil {
-				updateSource("Worktrees", render.StatusLoading)
-			}
+			notifySource(updateSource, "Worktrees", render.StatusLoading)
 			if len(cfg.Local.BaseDirs) == 0 {
-				if updateSource != nil {
-					updateSource("Worktrees", render.StatusDone)
-				}
+				notifySource(updateSource, "Worktrees", render.StatusDone)
 				return nil
 			}
 			if !flags.NoCache {
-				hit, stale := cache.GetStale("worktrees", &scanRes, cache.WorktreesTTL, cache.StaleTTL)
-				if hit {
-					if updateSource != nil {
-						updateSource("Worktrees", render.StatusCached)
+				if served := serveCached("worktrees", &scanRes, cache.WorktreesTTL, updateSource, "Worktrees", func() {
+					fetched, err := source.ScanWorktrees(cfg.Local.BaseDirs)
+					if err == nil {
+						_ = cache.Set("worktrees", fetched)
 					}
-					if stale {
-						go func() {
-							fetched, err := source.ScanWorktrees(cfg.Local.BaseDirs)
-							if err == nil {
-								_ = cache.Set("worktrees", fetched)
-							}
-						}()
-					}
+				}); served {
 					return nil
 				}
 			}
@@ -122,15 +98,11 @@ func main() {
 			scanRes, err = source.ScanWorktrees(cfg.Local.BaseDirs)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("git: %v", err))
-				if updateSource != nil {
-					updateSource("Worktrees", render.StatusError)
-				}
+				notifySource(updateSource, "Worktrees", render.StatusError)
 				return nil
 			}
 			_ = cache.Set("worktrees", scanRes)
-			if updateSource != nil {
-				updateSource("Worktrees", render.StatusDone)
-			}
+			notifySource(updateSource, "Worktrees", render.StatusDone)
 			return nil
 		})
 
@@ -208,22 +180,7 @@ func main() {
 
 	// Debug
 	if flags.Debug {
-		fmt.Fprintf(os.Stderr, "\n--- Debug ---\n")
-		for _, item := range result.Items {
-			if item.Issue != nil {
-				wt := "(no worktree)"
-				if item.Worktree != nil {
-					wt = item.Worktree.Path
-				}
-				pr := "(no PR)"
-				if item.PR != nil {
-					pr = fmt.Sprintf("PR #%d", item.PR.Number)
-				}
-				fmt.Fprintf(os.Stderr, "  %s  score=%d  branch=%q  %s  %s\n",
-					item.Issue.Identifier, item.Score, item.Issue.BranchName, pr, wt)
-			}
-		}
-		fmt.Fprintf(os.Stderr, "---\n\n")
+		printDebug(result.Items)
 	}
 
 	for _, w := range result.Warnings {
@@ -349,4 +306,48 @@ func runBenchmark(cfg *config.Config, verbose bool) {
 	}
 	fmt.Fprintf(os.Stderr, "%-25s %10s %8s\n", "─────────────────────────", "──────────", "────────")
 	fmt.Fprintf(os.Stderr, "%-25s %10s %8d\n", "TOTAL", totalDuration.Round(time.Millisecond), len(items))
+}
+
+// notifySource sends a status update if the callback is non-nil.
+func notifySource(updateSource func(string, render.SourceStatus), name string, status render.SourceStatus) {
+	if updateSource != nil {
+		updateSource(name, status)
+	}
+}
+
+// serveCached checks the stale-while-revalidate cache for the given key.
+// If a cache hit is found, it notifies the source (using sourceName) as cached,
+// optionally kicks off a background revalidation, and returns true.
+// Returns false on cache miss.
+func serveCached[T any](key string, dest *T, ttl time.Duration, updateSource func(string, render.SourceStatus), sourceName string, revalidate func()) bool {
+	hit, stale := cache.GetStale(key, dest, ttl, cache.StaleTTL)
+	if !hit {
+		return false
+	}
+	notifySource(updateSource, sourceName, render.StatusCached)
+	if stale {
+		go revalidate()
+	}
+	return true
+}
+
+// printDebug writes a debug dump of work items to stderr.
+func printDebug(items []model.WorkItem) {
+	fmt.Fprintf(os.Stderr, "\n--- Debug ---\n")
+	for _, item := range items {
+		if item.Issue == nil {
+			continue
+		}
+		wt := "(no worktree)"
+		if item.Worktree != nil {
+			wt = item.Worktree.Path
+		}
+		pr := "(no PR)"
+		if item.PR != nil {
+			pr = fmt.Sprintf("PR #%d", item.PR.Number)
+		}
+		fmt.Fprintf(os.Stderr, "  %s  score=%d  branch=%q  %s  %s\n",
+			item.Issue.Identifier, item.Score, item.Issue.BranchName, pr, wt)
+	}
+	fmt.Fprintf(os.Stderr, "---\n\n")
 }

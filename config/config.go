@@ -58,6 +58,7 @@ func Load() (*Config, error) {
 
 	configPath, err := Path()
 	if err != nil {
+		//nolint:nilerr // If we can't determine the config path, return default config gracefully.
 		return cfg, nil
 	}
 
@@ -82,7 +83,7 @@ func Write(cfg *Config) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
 		return err
 	}
 
@@ -96,5 +97,5 @@ func Write(cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, buf.Bytes(), 0644)
+	return os.WriteFile(configPath, buf.Bytes(), 0o600)
 }

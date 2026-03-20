@@ -18,7 +18,7 @@ const (
 
 // isInteractive returns true if stdin is a terminal.
 func isInteractive() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
+	return term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
 }
 
 // EnsureSetup checks that required credentials exist and runs interactive

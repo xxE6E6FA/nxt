@@ -9,10 +9,10 @@ import (
 
 // Default TTLs per source. Callers can override via GetWithTTL.
 const (
-	DefaultTTL    = 5 * time.Minute
-	GitHubTTL     = 5 * time.Minute
-	LinearTTL     = 2 * time.Minute
-	WorktreesTTL  = 30 * time.Second
+	DefaultTTL   = 5 * time.Minute
+	GitHubTTL    = 5 * time.Minute
+	LinearTTL    = 2 * time.Minute
+	WorktreesTTL = 30 * time.Second
 )
 
 type entry struct {
@@ -65,7 +65,7 @@ const StaleTTL = 10 * time.Minute
 //   - (true, false) if data is within freshTTL — fresh hit
 //   - (true, true)  if data is between freshTTL and staleTTL — stale hit, caller should revalidate
 //   - (false, false) if data is beyond staleTTL or missing — full miss
-func GetStale(key string, dest interface{}, freshTTL, staleTTL time.Duration) (hit bool, stale bool) {
+func GetStale(key string, dest interface{}, freshTTL, staleTTL time.Duration) (hit, stale bool) {
 	data, err := os.ReadFile(cachePath(key))
 	if err != nil {
 		return false, false
@@ -111,9 +111,9 @@ func Set(key string, value interface{}) error {
 	}
 
 	dir := cacheDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 
-	return os.WriteFile(cachePath(key), buf, 0644)
+	return os.WriteFile(cachePath(key), buf, 0o600)
 }

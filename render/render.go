@@ -23,7 +23,7 @@ func hyperlink(url, text string) string {
 }
 
 func termWidth() int {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	w, _, err := term.GetSize(int(os.Stdout.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
 	if err != nil || w < 60 {
 		return 80
 	}
@@ -57,11 +57,12 @@ func renderStaticItem(idx int, item model.WorkItem, width int) {
 	// Rank
 	rankLabel := fmt.Sprintf("%2d", idx)
 	var rankStr string
-	if item.Score >= 30 {
+	switch {
+	case item.Score >= 30:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgHigh).Render(rankLabel)
-	} else if item.Score >= 15 {
+	case item.Score >= 15:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgMed).Render(rankLabel)
-	} else {
+	default:
 		rankStr = lipgloss.NewStyle().Bold(true).Foreground(colorUrgLow).Render(rankLabel)
 	}
 
@@ -130,17 +131,17 @@ func shortenPath(p string) string {
 	return p
 }
 
-func truncate(s string, max int) string {
-	if max <= 0 {
+func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
 		return s
 	}
-	if len(s) <= max {
+	if len(s) <= maxLen {
 		return s
 	}
-	if max <= 1 {
+	if maxLen <= 1 {
 		return "…"
 	}
-	return s[:max-1] + "…"
+	return s[:maxLen-1] + "…"
 }
 
 func humanDuration(d time.Duration) string {

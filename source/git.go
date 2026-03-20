@@ -25,7 +25,7 @@ type ScanResult struct {
 
 // ScanWorktrees recursively finds git repos in baseDirs and lists their worktrees.
 func ScanWorktrees(baseDirs []string) (ScanResult, error) {
-	var repoPaths []string
+	repoPaths := make([]string, 0, len(baseDirs))
 
 	for _, baseDir := range baseDirs {
 		repoPaths = append(repoPaths, findGitReposUnder(baseDir, 4)...)
