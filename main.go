@@ -25,6 +25,11 @@ import (
 func main() {
 	flags := cmd.ParseFlags()
 
+	if flags.Update {
+		cmd.RunUpdate()
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)

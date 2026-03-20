@@ -1,4 +1,6 @@
 BINARY = nxt
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS = -s -w -X github.com/xxE6E6FA/nxt/cmd.version=$(VERSION)
 
 ## help: print this help message
 .PHONY: help
@@ -9,12 +11,27 @@ help:
 ## build: build the binary
 .PHONY: build
 build:
-	go build -o ${BINARY} .
+	go build -ldflags '$(LDFLAGS)' -o ${BINARY} .
+
+## install: build and install to $GOPATH/bin
+.PHONY: install
+install:
+	go install -ldflags '$(LDFLAGS)' .
 
 ## run: build and run
 .PHONY: run
 run: build
 	./${BINARY}
+
+## release: tag and push a new version (usage: make release V=0.2.0)
+.PHONY: release
+release:
+ifndef V
+	$(error usage: make release V=0.2.0)
+endif
+	@if git tag | grep -q "^v$(V)$$"; then echo "Tag v$(V) already exists"; exit 1; fi
+	git tag v$(V)
+	git push origin v$(V)
 
 ## test: run all tests with race detector
 .PHONY: test

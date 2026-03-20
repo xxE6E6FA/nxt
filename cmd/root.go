@@ -1,6 +1,11 @@
 package cmd
 
-import "flag"
+import (
+	"flag"
+	"fmt"
+	"os"
+	"runtime/debug"
+)
 
 type Flags struct {
 	NoCache   bool
@@ -9,6 +14,21 @@ type Flags struct {
 	Debug     bool
 	Benchmark bool
 	Verbose   bool
+	Version   bool
+	Update    bool
+}
+
+// version is set by goreleaser ldflags. Falls back to BuildInfo.
+var version = "dev"
+
+func GetVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 func ParseFlags() Flags {
@@ -19,7 +39,15 @@ func ParseFlags() Flags {
 	flag.BoolVar(&f.Debug, "debug", false, "print debug info about data sources")
 	flag.BoolVar(&f.Benchmark, "benchmark", false, "fetch all data with no cache and print timings")
 	flag.BoolVar(&f.Verbose, "verbose", false, "show detailed fetch logs (use with --benchmark)")
+	flag.BoolVar(&f.Version, "version", false, "print version and exit")
+	flag.BoolVar(&f.Update, "update", false, "update to the latest release")
 	flag.Parse()
+
+	if f.Version {
+		fmt.Println(GetVersion())
+		os.Exit(0)
+	}
+
 	if f.Benchmark {
 		f.NoCache = true
 	}
