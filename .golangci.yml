@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  default: standard
+  enable:
+    - goconst
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - unconvert
+    - unparam
+    - revive
+    - exhaustive
+    - nolintlint
+    - nakedret
+    - prealloc
+    - whitespace
+    - nestif
+    - bodyclose
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+      disabled-checks: []
+    exhaustive:
+      default-signifies-exhaustive: true
+    nakedret:
+      max-func-lines: 20
+    nestif:
+      min-complexity: 5
+    revive:
+      rules:
+        - name: unexported-return
+          disabled: true
+
+  exclusions:
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      - path: ".*\\.go"
+        text: "tea\\.(Model|Cmd|Msg)"
+        linters:
+          - wrapcheck
+          - ireturn
+    generated: lax
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
