@@ -32,7 +32,7 @@ render/settings.go   ← inline settings editor (editor command, base_dirs, max_
 - **WorkItem**: the unified domain object after linking. Always has at least one of: Issue, PR, Worktree.
 - **Linking**: issues are the primary axis. PRs and worktrees match by branch name (Linear's `branchName` field or issue identifier as substring). Unmatched PRs become standalone items. A `repoMap` provides fallback folder linking via PR repo → local path.
 - **Scoring**: purely additive. Signals: CI failing (+40), changes requested (+35), deadline proximity (+30 max), priority (+25/15/5), in-cycle (+10), no branch yet (+8), staleness (+20 max).
-- **Cache**: JSON files under `~/.cache/nxt/` with 60s TTL. Keys: `linear`, `github`, `worktrees`. Bypass with `--no-cache`.
+- **Cache**: JSON files under `~/.cache/nxt/` with stale-while-revalidate pattern (Linear: 2m fresh/10m stale, GitHub: 5m/10m, Worktrees: 30s/10m). Bypass with `--no-cache`.
 - **GitHub auth**: uses `gh auth` multi-account support. Resolves the right token per repo owner by probing the GitHub API.
 
 ## Tech stack
@@ -64,13 +64,48 @@ editor = "cursor"        # command to open folders; falls back to $VISUAL → $E
 ## Building and running
 
 ```bash
-go build -o nxt .        # compile
+make build               # compile (outputs ./nxt)
+make run                 # build and run
 ./nxt                    # interactive TUI
 ./nxt --json             # JSON output
 ./nxt --no-cache         # fresh fetch
 ./nxt --debug            # debug info to stderr
 ./nxt --setup            # re-run setup wizard
 ```
+
+## Quality gates
+
+**Before committing any code change, run:**
+```bash
+make audit    # runs: go vet, golangci-lint, go test -race, govulncheck
+```
+
+### Linting
+
+golangci-lint v2 is configured in `.golangci.yml` with 15 linters. Key points:
+- Run `make lint` to check, `make fmt` to auto-format
+- Bubbletea-specific exclusions are pre-configured (hugeParam, ireturn on tea types, unexported-return)
+- Use `//nolint:lintername // reason` sparingly and always with a reason
+- golangci-lint and govulncheck are pinned as Go tool deps in `go.mod` — no separate install needed
+
+### Testing
+
+- Use stdlib `testing` with table-driven tests and subtests (see `scorer/scorer_test.go` for the pattern)
+- Always run tests with `-race` (the Makefile does this by default)
+- Use `model.*` constants (e.g., `model.CIFailing`, `model.ReviewApproved`) instead of raw strings
+- Check coverage with `make cover` — generates `coverage.html`
+- Source fetchers (`source/*.go`) shell out to `gh`/`git`; test the parsing/conversion functions, not the fetch functions
+
+### Pre-commit hooks
+
+lefthook runs `gofmt`, `go vet`, and `go test -short` on every commit. Install with:
+```bash
+brew install lefthook && lefthook install --force
+```
+
+### CI
+
+GitHub Actions runs three parallel jobs on push to main and PRs: test (with race detector), lint (golangci-lint), and vuln (govulncheck).
 
 ## Conventions
 
