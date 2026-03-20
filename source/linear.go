@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xxE6E6FA/nxt/model"
@@ -114,6 +115,10 @@ func FetchLinearIssues(apiKey string) ([]model.LinearIssue, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// RFC 6750: Linear accepts bare tokens but Bearer prefix is correct.
+	if !strings.HasPrefix(apiKey, "Bearer ") {
+		apiKey = "Bearer " + apiKey
+	}
 	req.Header.Set("Authorization", apiKey)
 
 	resp, err := httpClient.Do(req)

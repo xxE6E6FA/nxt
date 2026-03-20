@@ -204,8 +204,8 @@ func TestGraphqlPRToFull(t *testing.T) {
 		}
 
 		// Comments
-		if len(full.Comments) != 7 {
-			t.Errorf("Comments len = %d, want 7", len(full.Comments))
+		if full.Comments != 7 {
+			t.Errorf("Comments = %d, want 7", full.Comments)
 		}
 
 		// Review requests
@@ -365,8 +365,8 @@ func TestGraphqlPRToFullViaJSON(t *testing.T) {
 	if len(full.StatusCheckRollup) != 2 {
 		t.Errorf("StatusCheckRollup len = %d, want 2", len(full.StatusCheckRollup))
 	}
-	if len(full.Comments) != 3 {
-		t.Errorf("Comments len = %d, want 3", len(full.Comments))
+	if full.Comments != 3 {
+		t.Errorf("Comments = %d, want 3", full.Comments)
 	}
 	if len(full.ReviewRequests) != 1 {
 		t.Errorf("ReviewRequests len = %d, want 1", len(full.ReviewRequests))

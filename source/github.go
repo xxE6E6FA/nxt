@@ -42,7 +42,7 @@ type ghPRFull struct {
 	MergeStateStatus  string            `json:"mergeStateStatus"`
 	ReviewDecision    string            `json:"reviewDecision"`
 	StatusCheckRollup []ciCheck         `json:"statusCheckRollup"`
-	Comments          []json.RawMessage `json:"comments"`
+	Comments          int               `json:"comments"`
 	ReviewRequests    []ghReviewRequest `json:"reviewRequests"`
 	Labels            []ghLabel         `json:"labels"`
 }
@@ -168,8 +168,7 @@ func graphqlPRToFull(g *graphqlPRResponse) *ghPRFull {
 		}
 	}
 
-	// Convert comments totalCount to a slice of the right length
-	full.Comments = make([]json.RawMessage, g.Comments.TotalCount)
+	full.Comments = g.Comments.TotalCount
 
 	// Convert review requests
 	for _, rr := range g.ReviewRequests.Nodes {
@@ -192,18 +191,26 @@ var (
 
 func ghAccounts() []string {
 	accountsOnce.Do(func() {
-		cmd := exec.Command("gh", "auth", "status")
-		out, _ := cmd.CombinedOutput()
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "✓ Logged in to") && strings.Contains(line, "account") {
-				parts := strings.Fields(line)
-				for i, p := range parts {
-					if p == "account" && i+1 < len(parts) {
-						acct := strings.TrimSuffix(parts[i+1], "(keyring)")
-						acct = strings.TrimSpace(acct)
-						cachedAccounts = append(cachedAccounts, acct)
-					}
+		cmd := exec.Command("gh", "auth", "status", "--json", "hosts")
+		out, err := cmd.Output()
+		if err != nil {
+			return
+		}
+
+		var resp struct {
+			Hosts map[string][]struct {
+				Login string `json:"login"`
+				State string `json:"state"`
+			} `json:"hosts"`
+		}
+		if err := json.Unmarshal(out, &resp); err != nil {
+			return
+		}
+
+		for _, accounts := range resp.Hosts {
+			for _, a := range accounts {
+				if a.State == "success" && a.Login != "" {
+					cachedAccounts = append(cachedAccounts, a.Login)
 				}
 			}
 		}
@@ -337,7 +344,7 @@ func searchAuthoredPRs(account string) ([]model.PullRequest, error) {
 			ChangedFiles:     full.ChangedFiles,
 			Mergeable:        full.Mergeable,
 			MergeStateStatus: full.MergeStateStatus,
-			Comments:         len(full.Comments),
+			Comments:         full.Comments,
 			ReviewRequests:   len(full.ReviewRequests),
 		}
 		for _, l := range full.Labels {
