@@ -40,6 +40,7 @@ type phase int
 const (
 	phaseLoading phase = iota
 	phaseReady
+	phaseDetail
 	phaseSettings
 )
 
@@ -50,7 +51,8 @@ type tuiModel struct {
 	width   int
 	height  int
 	action  Action
-	warnings []string
+	warnings  []string
+	fetchedAt time.Time
 
 	// Config
 	editor   string // command to open folders
@@ -148,6 +150,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.phase = phaseReady
 		m.items = msg.Items
 		m.warnings = msg.Warnings
+		m.fetchedAt = time.Now()
 		return m, nil
 
 	case execDoneMsg:
@@ -165,6 +168,17 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Settings phase has its own key handling
 	if m.phase == phaseSettings {
 		return m.handleSettingsKey(msg)
+	}
+
+	// Detail phase — any key goes back to list
+	if m.phase == phaseDetail {
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		default:
+			m.phase = phaseReady
+			return m, nil
+		}
 	}
 
 	switch msg.String() {
@@ -230,6 +244,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if item.PR != nil && item.PR.URL != "" {
 			openBrowser(item.PR.URL)
 		}
+
+	case "d":
+		// Show score breakdown detail
+		m.phase = phaseDetail
+		return m, nil
 	}
 
 	return m, nil
@@ -342,6 +361,8 @@ func (m tuiModel) View() string {
 	switch m.phase {
 	case phaseLoading:
 		b.WriteString(m.viewLoading())
+	case phaseDetail:
+		b.WriteString(m.viewDetail())
 	case phaseSettings:
 		return m.settings.view(m.width)
 	default:
@@ -386,6 +407,7 @@ func (m tuiModel) viewList() string {
 	if len(m.items) == 0 {
 		noItems := lipgloss.NewStyle().Foreground(colorStatus)
 		b.WriteString(noItems.Render("  No active work items found.") + "\n")
+		b.WriteString(m.renderStatusBar())
 		return b.String()
 	}
 
@@ -409,12 +431,7 @@ func (m tuiModel) viewList() string {
 		b.WriteString(m.renderItem(i+1, m.items[i], i == m.cursor))
 	}
 
-	warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
-	for _, w := range m.warnings {
-		b.WriteString("  " + warnStyle.Render("⚠ "+w) + "\n")
-	}
-
-	b.WriteString(m.renderHelp())
+	b.WriteString(m.renderStatusBar())
 	return b.String()
 }
 
@@ -554,11 +571,116 @@ func (m tuiModel) renderHelp() string {
 		keys = append(keys, keyStyle.Render("g")+lblStyle.Render(" github"))
 	}
 	keys = append(keys,
+		keyStyle.Render("d")+lblStyle.Render(" detail"),
 		keyStyle.Render("s")+lblStyle.Render(" settings"),
 		keyStyle.Render("q")+lblStyle.Render(" quit"),
 	)
 
-	return "\n  " + strings.Join(keys, "  ") + "\n"
+	return strings.Join(keys, "  ")
+}
+
+func (m tuiModel) renderStatusBar() string {
+	dim := lipgloss.NewStyle().Foreground(colorStatusBar)
+	warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
+
+	// Left side: item count + warnings
+	var left []string
+	left = append(left, dim.Render(fmt.Sprintf("%d items", len(m.items))))
+
+	if len(m.warnings) > 0 {
+		left = append(left, warnStyle.Render(fmt.Sprintf("⚠ %d warning(s)", len(m.warnings))))
+	}
+
+	if !m.fetchedAt.IsZero() {
+		left = append(left, dim.Render("updated "+humanDuration(time.Since(m.fetchedAt))))
+	}
+
+	leftStr := "  " + strings.Join(left, dim.Render(" · "))
+
+	// Right side: contextual help keys
+	rightStr := m.renderHelp() + "  "
+
+	// Calculate padding between left and right
+	leftWidth := lipgloss.Width(leftStr)
+	rightWidth := lipgloss.Width(rightStr)
+	gap := m.width - leftWidth - rightWidth
+	if gap < 2 {
+		gap = 2
+	}
+
+	rule := lipgloss.NewStyle().Foreground(colorDot).Render(strings.Repeat("─", m.width))
+	return "\n" + rule + "\n" + leftStr + strings.Repeat(" ", gap) + rightStr
+}
+
+func (m tuiModel) viewDetail() string {
+	if len(m.items) == 0 || m.cursor >= len(m.items) {
+		return ""
+	}
+
+	item := m.items[m.cursor]
+	var b strings.Builder
+
+	// Item header
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorTitleBright)
+	idStyle := lipgloss.NewStyle().Bold(true).Foreground(colorIssueIDSel)
+	dimStyle := lipgloss.NewStyle().Foreground(colorStatus)
+
+	if item.Issue != nil {
+		b.WriteString(fmt.Sprintf("  %s  %s\n",
+			idStyle.Render(item.Issue.Identifier),
+			titleStyle.Render(item.Issue.Title)))
+	} else if item.PR != nil {
+		b.WriteString(fmt.Sprintf("  %s  %s\n",
+			idStyle.Render(fmt.Sprintf("PR #%d", item.PR.Number)),
+			titleStyle.Render(item.PR.Title)))
+	}
+
+	// Score total
+	var scoreColor lipgloss.AdaptiveColor
+	if item.Score >= 30 {
+		scoreColor = colorUrgHigh
+	} else if item.Score >= 15 {
+		scoreColor = colorUrgMed
+	} else {
+		scoreColor = colorUrgLow
+	}
+	scoreStyle := lipgloss.NewStyle().Bold(true).Foreground(scoreColor)
+	b.WriteString(fmt.Sprintf("  Score: %s\n\n", scoreStyle.Render(fmt.Sprintf("%d", item.Score))))
+
+	// Breakdown
+	if len(item.Breakdown) == 0 {
+		b.WriteString(dimStyle.Render("  No scoring factors — base score 0") + "\n")
+	} else {
+		labelStyle := lipgloss.NewStyle().Foreground(colorTitleBright).Width(20)
+		ptsStyle := lipgloss.NewStyle().Bold(true)
+		detailStyle := lipgloss.NewStyle().Foreground(colorStatus)
+
+		for _, f := range item.Breakdown {
+			var ptsColor lipgloss.AdaptiveColor
+			if f.Points >= 25 {
+				ptsColor = colorUrgHigh
+			} else if f.Points >= 10 {
+				ptsColor = colorUrgMed
+			} else {
+				ptsColor = colorUrgLow
+			}
+
+			pts := ptsStyle.Foreground(ptsColor).Render(fmt.Sprintf("+%d", f.Points))
+			label := labelStyle.Render(f.Label)
+			line := fmt.Sprintf("  %s  %s", pts, label)
+			if f.Detail != "" {
+				line += detailStyle.Render(f.Detail)
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+
+	// Hint
+	b.WriteString("\n")
+	hintStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
+	b.WriteString(hintStyle.Render("  Press any key to go back") + "\n")
+
+	return b.String()
 }
 
 func wtPath(item model.WorkItem) string {

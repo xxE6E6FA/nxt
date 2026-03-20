@@ -49,4 +49,5 @@ var (
 	colorCheckmark = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#27c93f"}
 	colorError     = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#ff5f56"}
 	colorDimSource = lipgloss.AdaptiveColor{Light: "#d1d5db", Dark: "#475569"}
+	colorStatusBar = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#64748b"}
 )
