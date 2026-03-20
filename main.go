@@ -36,13 +36,14 @@ func main() {
 	// Build the fetch function used by both interactive and non-interactive paths.
 	fetchData := func(updateSource func(string, render.SourceStatus)) render.FetchResult {
 		var (
-			issues    []model.LinearIssue
-			prs       []model.PullRequest
-			scanRes   source.ScanResult
-			warnings  []string
+			issues      []model.LinearIssue
+			prs         []model.PullRequest
+			authoredPRs []model.PullRequest
+			scanRes     source.ScanResult
+			warnings    []string
 		)
 
-		// Phase 1: Linear + worktrees in parallel
+		// Phase 1: Linear + worktrees + authored PRs in parallel
 		g := new(errgroup.Group)
 
 		g.Go(func() error {
@@ -107,13 +108,26 @@ func main() {
 			return nil
 		})
 
+		// Start authored PR search in parallel — doesn't need Linear data
+		githubCached := !flags.NoCache && cache.Get("github", &prs)
+		if !githubCached {
+			if updateSource != nil {
+				updateSource("GitHub", render.StatusLoading)
+			}
+			g.Go(func() error {
+				var err error
+				authoredPRs, err = source.FetchAuthoredPRs()
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("github authored: %v", err))
+				}
+				return nil
+			})
+		}
+
 		_ = g.Wait()
 
-		// Phase 2: GitHub PRs
-		if updateSource != nil {
-			updateSource("GitHub", render.StatusLoading)
-		}
-		if !flags.NoCache && cache.Get("github", &prs) {
+		// Phase 2: Fetch Linear-linked PRs (needs Linear data) and merge
+		if githubCached {
 			if updateSource != nil {
 				updateSource("GitHub", render.StatusCached)
 			}
@@ -122,10 +136,12 @@ func main() {
 			for _, issue := range issues {
 				prURLs = append(prURLs, issue.PRURLs...)
 			}
-			var err error
-			prs, err = source.FetchPullRequests(prURLs)
+			linkedPRs, err := source.FetchLinkedPRs(prURLs)
 			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("github: %v", err))
+				warnings = append(warnings, fmt.Sprintf("github linked: %v", err))
+			}
+			prs = source.MergePRs(authoredPRs, linkedPRs)
+			if err != nil {
 				if updateSource != nil {
 					updateSource("GitHub", render.StatusError)
 				}
