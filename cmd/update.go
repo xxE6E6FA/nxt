@@ -30,60 +30,57 @@ func RunUpdate() {
 
 	fmt.Fprintf(os.Stderr, "Updating to %s...\n", latest)
 
-	// Determine the asset name for this platform
+	if err := downloadAndInstall(latest); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Updated to %s\n", latest)
+}
+
+func downloadAndInstall(tag string) error {
 	asset := assetName()
 
-	// Download to a temp directory
 	tmpDir, err := os.MkdirTemp("", "nxt-update-*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating temp dir: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("creating temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	//nolint:gosec // repo and latest are not user-controlled
-	dlCmd := exec.Command("gh", "release", "download", latest,
+	dlCmd := exec.Command("gh", "release", "download", tag,
 		"--repo", repo,
 		"--pattern", asset,
 		"--dir", tmpDir)
 	dlCmd.Stderr = os.Stderr
 	if err := dlCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error downloading release: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("downloading release: %w", err)
 	}
 
-	// Extract the binary from the tarball
 	tarPath := filepath.Join(tmpDir, asset)
-	//nolint:gosec // tarPath is constructed from constants
 	extractCmd := exec.Command("tar", "-xzf", tarPath, "-C", tmpDir, "nxt")
 	extractCmd.Stderr = os.Stderr
 	if err := extractCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("extracting: %w", err)
 	}
 
-	// Replace the running binary
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error finding current binary: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("finding current binary: %w", err)
 	}
 	self, err = filepath.EvalSymlinks(self)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving symlinks: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("resolving symlinks: %w", err)
 	}
 
 	newBin := filepath.Join(tmpDir, "nxt")
 	if err := os.Rename(newBin, self); err != nil {
 		// Cross-device rename; fall back to copy
 		if copyErr := copyFile(newBin, self); copyErr != nil {
-			fmt.Fprintf(os.Stderr, "Error replacing binary: %v\n", copyErr)
-			os.Exit(1)
+			return fmt.Errorf("replacing binary: %w", copyErr)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Updated to %s\n", latest)
+	return nil
 }
 
 func latestTag() (string, error) {
@@ -95,9 +92,9 @@ func latestTag() (string, error) {
 }
 
 func assetName() string {
-	os := runtime.GOOS
+	goos := runtime.GOOS
 	arch := runtime.GOARCH
-	return fmt.Sprintf("nxt_%s_%s.tar.gz", os, arch)
+	return fmt.Sprintf("nxt_%s_%s.tar.gz", goos, arch)
 }
 
 func copyFile(src, dst string) error {
@@ -105,5 +102,5 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o755) //nolint:gosec // executable binary
+	return os.WriteFile(dst, data, 0o755) //nolint:gosec // executable binary needs 755
 }
