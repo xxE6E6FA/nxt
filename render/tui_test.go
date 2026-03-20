@@ -299,3 +299,127 @@ func TestViewLoadingPhase(t *testing.T) {
 		t.Error("loading view does not contain source name 'GitHub'")
 	}
 }
+
+// --- Warnings tests ---
+
+func TestWarningsKeyOpensView(t *testing.T) {
+	m := testModel(sampleItems())
+	m.warnings = []string{"linear: connection refused"}
+
+	m = updateModel(m, keyMsg("w"))
+	if m.phase != phaseWarnings {
+		t.Errorf("after w: phase = %d, want %d (phaseWarnings)", m.phase, phaseWarnings)
+	}
+
+	// Any key goes back to list
+	m = updateModel(m, keyMsg("x"))
+	if m.phase != phaseReady {
+		t.Errorf("after x in warnings: phase = %d, want %d (phaseReady)", m.phase, phaseReady)
+	}
+}
+
+func TestWarningsKeyNoopWithoutWarnings(t *testing.T) {
+	m := testModel(sampleItems())
+	// No warnings set
+
+	m = updateModel(m, keyMsg("w"))
+	if m.phase != phaseReady {
+		t.Errorf("w with no warnings should stay in phaseReady, got %d", m.phase)
+	}
+}
+
+func TestWarningsViewContainsMessages(t *testing.T) {
+	m := testModel(sampleItems())
+	m.warnings = []string{"linear: connection refused", "github authored: rate limited"}
+	m.phase = phaseWarnings
+
+	view := m.View()
+	if !strings.Contains(view, "connection refused") {
+		t.Error("warnings view should contain 'connection refused'")
+	}
+	if !strings.Contains(view, "rate limited") {
+		t.Error("warnings view should contain 'rate limited'")
+	}
+	if !strings.Contains(view, "Warnings (2)") {
+		t.Error("warnings view should show warning count")
+	}
+}
+
+func TestWarningsQuitFromView(t *testing.T) {
+	m := testModel(sampleItems())
+	m.warnings = []string{"test"}
+	m.phase = phaseWarnings
+
+	_, cmd := m.handleKey(keyMsg("q"))
+	if cmd == nil {
+		t.Error("q in warnings view should return quit command")
+	}
+}
+
+func TestDetailViewShowsWarnings(t *testing.T) {
+	items := sampleItems()
+	m := testModel(items)
+	m.phase = phaseDetail
+	m.warnings = []string{"github authored: 403 forbidden"}
+
+	view := m.View()
+	if !strings.Contains(view, "403 forbidden") {
+		t.Error("detail view should show warning text")
+	}
+	if !strings.Contains(view, "Warnings") {
+		t.Error("detail view should show 'Warnings' header")
+	}
+}
+
+func TestDetailViewNoWarningsSection(t *testing.T) {
+	items := sampleItems()
+	m := testModel(items)
+	m.phase = phaseDetail
+	// No warnings
+
+	view := m.View()
+	if strings.Contains(view, "Warnings") {
+		t.Error("detail view should not show warnings section when there are none")
+	}
+}
+
+func TestHelpShowsWarningKey(t *testing.T) {
+	m := testModel(sampleItems())
+	m.warnings = []string{"test warning"}
+	help := m.renderHelp()
+
+	if !strings.Contains(help, "1 warning") {
+		t.Error("help should show warning count when warnings exist")
+	}
+}
+
+func TestHelpNoWarningKeyWithoutWarnings(t *testing.T) {
+	m := testModel(sampleItems())
+	help := m.renderHelp()
+
+	if strings.Contains(help, "warning") {
+		t.Error("help should not show warning key when no warnings")
+	}
+}
+
+func TestHelpEmptyItemsShowsWarningKey(t *testing.T) {
+	m := testModel(nil)
+	m.items = nil
+	m.warnings = []string{"test"}
+	help := m.renderHelp()
+
+	if !strings.Contains(help, "1 warning") {
+		t.Error("empty-items help should show warning count when warnings exist")
+	}
+}
+
+func TestWarningsKeyWorksWithEmptyItems(t *testing.T) {
+	m := testModel(nil)
+	m.items = nil
+	m.warnings = []string{"something failed"}
+
+	m = updateModel(m, keyMsg("w"))
+	if m.phase != phaseWarnings {
+		t.Errorf("w with empty items but warnings should enter phaseWarnings, got %d", m.phase)
+	}
+}

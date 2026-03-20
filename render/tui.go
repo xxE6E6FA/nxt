@@ -55,6 +55,7 @@ const (
 	phaseReady
 	phaseDetail
 	phaseSettings
+	phaseWarnings
 )
 
 type tuiModel struct {
@@ -279,6 +280,17 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Warnings phase — any key goes back to list
+	if m.phase == phaseWarnings {
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		default:
+			m.phase = phaseReady
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -286,9 +298,13 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Refresh works even with empty items
+	// Refresh and warnings work even with empty items
 	if msg.String() == "r" && m.phase == phaseReady {
 		return m.triggerRefresh()
+	}
+	if msg.String() == "w" && m.phase == phaseReady && len(m.warnings) > 0 {
+		m.phase = phaseWarnings
+		return m, nil
 	}
 
 	if m.phase != phaseReady || len(m.items) == 0 {
@@ -470,6 +486,8 @@ func (m tuiModel) View() string {
 		b.WriteString(m.viewLoading())
 	case phaseDetail:
 		b.WriteString(m.viewDetail())
+	case phaseWarnings:
+		b.WriteString(m.viewWarnings())
 	case phaseSettings:
 		return m.settings.view()
 	default:
@@ -657,9 +675,14 @@ func (m tuiModel) renderHelp() string {
 	lblStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
 
 	if len(m.items) == 0 {
-		return keyStyle.Render("r") + lblStyle.Render(" refresh") + "  " +
-			keyStyle.Render("s") + lblStyle.Render(" settings") + "  " +
+		help := keyStyle.Render("r") + lblStyle.Render(" refresh") + "  "
+		if len(m.warnings) > 0 {
+			warnLbl := lipgloss.NewStyle().Foreground(colorWarn)
+			help += keyStyle.Render("w") + warnLbl.Render(fmt.Sprintf(" %d warning(s)", len(m.warnings))) + "  "
+		}
+		help += keyStyle.Render("s") + lblStyle.Render(" settings") + "  " +
 			keyStyle.Render("q") + lblStyle.Render(" quit")
+		return help
 	}
 
 	item := m.items[m.cursor]
@@ -682,6 +705,12 @@ func (m tuiModel) renderHelp() string {
 	}
 	keys = append(keys,
 		keyStyle.Render("d")+lblStyle.Render(" detail"),
+	)
+	if len(m.warnings) > 0 {
+		warnLbl := lipgloss.NewStyle().Foreground(colorWarn)
+		keys = append(keys, keyStyle.Render("w")+warnLbl.Render(fmt.Sprintf(" %d warning(s)", len(m.warnings))))
+	}
+	keys = append(keys,
 		keyStyle.Render("r")+lblStyle.Render(" refresh"),
 		keyStyle.Render("s")+lblStyle.Render(" settings"),
 		keyStyle.Render("q")+lblStyle.Render(" quit"),
@@ -769,11 +798,39 @@ func (m tuiModel) viewDetail() string {
 		renderBreakdown(&b, item.Breakdown)
 	}
 
+	// Warnings (if any)
+	if len(m.warnings) > 0 {
+		warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
+		b.WriteString("\n")
+		b.WriteString(warnStyle.Render(fmt.Sprintf("  Warnings (%d)", len(m.warnings))) + "\n")
+		for _, w := range m.warnings {
+			b.WriteString("  " + warnStyle.Render("⚠ ") + dimStyle.Render(w) + "\n")
+		}
+	}
+
 	// Hint
 	b.WriteString("\n")
 	hintStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
 	b.WriteString(hintStyle.Render("  Press any key to go back") + "\n")
 
+	return b.String()
+}
+
+func (m tuiModel) viewWarnings() string {
+	var b strings.Builder
+
+	warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
+	dimStyle := lipgloss.NewStyle().Foreground(colorStatus)
+	hintStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
+
+	b.WriteString(warnStyle.Render(fmt.Sprintf("  Warnings (%d)", len(m.warnings))) + "\n\n")
+
+	for _, w := range m.warnings {
+		b.WriteString("  " + warnStyle.Render("⚠ ") + dimStyle.Render(w) + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(hintStyle.Render("  Press any key to go back") + "\n")
 	return b.String()
 }
 
