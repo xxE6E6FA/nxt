@@ -2,9 +2,40 @@ package linker
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/xxE6E6FA/nxt/model"
 )
+
+// containsWord reports whether text contains word as a whole token,
+// bounded by start/end of string or non-alphanumeric characters.
+// This prevents "DISCO-123" from matching "disco-1234-branch".
+func containsWord(text, word string) bool {
+	if word == "" {
+		return true
+	}
+	tl := strings.ToLower(text)
+	wl := strings.ToLower(word)
+	wLen := len(wl)
+
+	for i := 0; ; {
+		idx := strings.Index(tl[i:], wl)
+		if idx < 0 {
+			return false
+		}
+		pos := i + idx
+		start := pos == 0 || !isAlnum(rune(tl[pos-1]))
+		end := pos+wLen == len(tl) || !isAlnum(rune(tl[pos+wLen]))
+		if start && end {
+			return true
+		}
+		i = pos + 1
+	}
+}
+
+func isAlnum(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
 
 // Link correlates Linear issues with worktrees and PRs, producing WorkItems.
 // Issues are the primary axis — each issue becomes a WorkItem.
@@ -58,21 +89,24 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 		items = append(items, item)
 	}
 
-	// Add unmatched PRs as standalone items, with repo-based folder linking
+	// Add unmatched PRs only if a local worktree is checked out on the
+	// same branch. One branch → one folder — no cross-repo leaking.
 	for i := range prs {
 		pr := &prs[i]
-		if !prUsed[pr.Number] {
-			item := model.WorkItem{PR: pr}
-			if pr.Repo != "" {
-				if localPath, ok := repoMap[pr.Repo]; ok {
-					item.Worktree = &model.Worktree{
-						Path:     localPath,
-						Branch:   pr.HeadBranch,
-						RepoRoot: localPath,
-					}
-				}
+		if prUsed[pr.Number] || pr.HeadBranch == "" {
+			continue
+		}
+		for j := range worktrees {
+			wt := &worktrees[j]
+			if wt.IsMain || wtUsed[wt.Path] {
+				continue
 			}
-			items = append(items, item)
+			if strings.EqualFold(wt.Branch, pr.HeadBranch) {
+				item := model.WorkItem{PR: pr, Worktree: wt}
+				items = append(items, item)
+				wtUsed[wt.Path] = true
+				break
+			}
 		}
 	}
 
@@ -82,15 +116,14 @@ func Link(issues []model.LinearIssue, prs []model.PullRequest, worktrees []model
 // matchBranch checks if a worktree branch matches a Linear issue.
 func matchBranch(issue *model.LinearIssue, branch string) bool {
 	lower := strings.ToLower(branch)
-	idLower := strings.ToLower(issue.Identifier)
 
 	// Primary: exact branchName match
 	if issue.BranchName != "" && strings.ToLower(issue.BranchName) == lower {
 		return true
 	}
 
-	// Fallback: issue ID as substring
-	return strings.Contains(lower, idLower)
+	// Fallback: issue ID as whole-word match (not substring)
+	return containsWord(branch, issue.Identifier)
 }
 
 // matchPR checks if a PR matches a Linear issue.
@@ -102,18 +135,16 @@ func matchPR(issue *model.LinearIssue, pr *model.PullRequest) bool {
 		}
 	}
 
-	idLower := strings.ToLower(issue.Identifier)
-
 	// Check head branch
 	if matchBranch(issue, pr.HeadBranch) {
 		return true
 	}
 
-	// Check PR title and body for issue ID
-	if strings.Contains(strings.ToLower(pr.Title), idLower) {
+	// Check PR title and body for issue ID (whole-word match)
+	if containsWord(pr.Title, issue.Identifier) {
 		return true
 	}
-	if strings.Contains(strings.ToLower(pr.Body), idLower) {
+	if containsWord(pr.Body, issue.Identifier) {
 		return true
 	}
 
