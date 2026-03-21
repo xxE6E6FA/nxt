@@ -11,6 +11,8 @@ import (
 	"github.com/xxE6E6FA/nxt/model"
 )
 
+const actionEditor = "editor"
+
 func init() {
 	// Stub out browser opening so tests don't spawn "open" processes.
 	openBrowserFunc = func(_ string) {}
@@ -56,8 +58,8 @@ func TestHandleKeyEnterOpensEditor(t *testing.T) {
 	result, cmd := m.handleKey(keyMsg("e"))
 	got := result.(tuiModel)
 
-	if got.lastAction.Kind != "editor" {
-		t.Errorf("lastAction.Kind = %q, want %q", got.lastAction.Kind, "editor")
+	if got.lastAction.Kind != actionEditor {
+		t.Errorf("lastAction.Kind = %q, want %q", got.lastAction.Kind, actionEditor)
 	}
 	if got.lastAction.Path != "/code/feature-branch" {
 		t.Errorf("lastAction.Path = %q, want %q", got.lastAction.Path, "/code/feature-branch")
@@ -187,8 +189,8 @@ func TestHandleKeyEnterWithWorktree(t *testing.T) {
 	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	got := result.(tuiModel)
 
-	if got.lastAction.Kind != "editor" {
-		t.Errorf("lastAction.Kind = %q, want %q", got.lastAction.Kind, "editor")
+	if got.lastAction.Kind != actionEditor {
+		t.Errorf("lastAction.Kind = %q, want %q", got.lastAction.Kind, actionEditor)
 	}
 	if cmd == nil {
 		t.Error("expected non-nil cmd for enter key editor exec")
@@ -202,7 +204,7 @@ func TestApplySettingsEditor(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	// Create config dir so Write succeeds
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{}
 	m := &tuiModel{
@@ -228,7 +230,7 @@ func TestApplySettingsEditor(t *testing.T) {
 func TestApplySettingsBaseDirs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{}
 	m := &tuiModel{
@@ -256,7 +258,7 @@ func TestApplySettingsBaseDirs(t *testing.T) {
 func TestApplySettingsBaseDirsTrimsEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{}
 	m := &tuiModel{
@@ -281,7 +283,7 @@ func TestApplySettingsBaseDirsTrimsEmpty(t *testing.T) {
 func TestApplySettingsMaxItems(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{}
 	m := &tuiModel{
@@ -303,7 +305,7 @@ func TestApplySettingsMaxItems(t *testing.T) {
 func TestApplySettingsMaxItemsInvalidNoChange(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{Display: config.DisplayConfig{MaxItems: 20}}
 	m := &tuiModel{
@@ -325,7 +327,7 @@ func TestApplySettingsMaxItemsInvalidNoChange(t *testing.T) {
 func TestApplySettingsMaxItemsZeroNoChange(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{Display: config.DisplayConfig{MaxItems: 20}}
 	m := &tuiModel{
@@ -347,7 +349,7 @@ func TestApplySettingsMaxItemsZeroNoChange(t *testing.T) {
 func TestApplySettingsNegativeMaxItemsNoChange(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{Display: config.DisplayConfig{MaxItems: 20}}
 	m := &tuiModel{
@@ -369,7 +371,7 @@ func TestApplySettingsNegativeMaxItemsNoChange(t *testing.T) {
 func TestApplySettingsWritesToDisk(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{}
 	m := &tuiModel{
@@ -401,7 +403,7 @@ func TestApplySettingsWritesToDisk(t *testing.T) {
 func TestApplySettingsAllFieldsTogether(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
+	_ = os.MkdirAll(filepath.Join(tmp, ".config", "nxt"), 0o750)
 
 	cfg := &config.Config{
 		Display: config.DisplayConfig{Editor: "code", MaxItems: 20},

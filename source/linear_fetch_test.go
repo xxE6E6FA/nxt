@@ -81,7 +81,7 @@ func TestFetchLinearIssuesWithHTTPTest(t *testing.T) {
 			t.Errorf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(response)) //nolint:errcheck
+		w.Write([]byte(response)) //nolint:errcheck,gosec // test handler, error irrelevant
 	}))
 	defer srv.Close()
 
@@ -166,7 +166,7 @@ func TestFetchLinearIssuesAPIError(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(response)) //nolint:errcheck
+		w.Write([]byte(response)) //nolint:errcheck,gosec // test handler, error irrelevant
 	}))
 	defer srv.Close()
 
@@ -182,7 +182,7 @@ func TestFetchLinearIssuesAPIError(t *testing.T) {
 func TestFetchLinearIssuesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(401)
-		w.Write([]byte("Unauthorized")) //nolint:errcheck
+		w.Write([]byte("Unauthorized")) //nolint:errcheck,gosec // test handler, error irrelevant
 	}))
 	defer srv.Close()
 
@@ -199,7 +199,7 @@ func TestFetchLinearIssuesStripsBearerPrefix(t *testing.T) {
 			t.Errorf("Authorization = %q, want %q (Bearer should be stripped)", auth, "already-prefixed")
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{"data":{"viewer":{"assignedIssues":{"nodes":[]}}}}`)) //nolint:errcheck
+		w.Write([]byte(`{"data":{"viewer":{"assignedIssues":{"nodes":[]}}}}`)) //nolint:errcheck,gosec // test handler, error irrelevant
 	}))
 	defer srv.Close()
 

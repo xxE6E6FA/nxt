@@ -38,7 +38,7 @@ func TestCopyFile(t *testing.T) {
 	src := tmp + "/src"
 	dst := tmp + "/dst"
 
-	if err := os.WriteFile(src, []byte("hello world"), 0o644); err != nil {
+	if err := os.WriteFile(src, []byte("hello world"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

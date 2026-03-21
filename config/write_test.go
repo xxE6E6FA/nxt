@@ -40,7 +40,7 @@ func TestWriteStripsAPIKey(t *testing.T) {
 }
 
 func containsString(haystack, needle string) bool {
-	return len(needle) > 0 && len(haystack) >= len(needle) && (haystack == needle || findSubstring(haystack, needle))
+	return needle != "" && len(haystack) >= len(needle) && (haystack == needle || findSubstring(haystack, needle))
 }
 
 func findSubstring(s, sub string) bool {
@@ -61,11 +61,11 @@ func TestWriteReadOnlyDir(t *testing.T) {
 	if err := os.MkdirAll(readonlyDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(readonlyDir, 0o444); err != nil {
+	if err := os.Chmod(readonlyDir, 0o444); err != nil { //nolint:gosec // intentionally restricting perms to test read-only behavior
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		os.Chmod(readonlyDir, 0o750) // restore so cleanup can remove
+		_ = os.Chmod(readonlyDir, 0o750) //nolint:gosec // restore write perms so t.TempDir cleanup can remove
 	})
 
 	cfg := &Config{Display: DisplayConfig{MaxItems: 10}}

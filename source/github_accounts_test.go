@@ -139,7 +139,7 @@ func TestSearchResponseParsing(t *testing.T) {
 	if full.ReviewDecision != "APPROVED" {
 		t.Errorf("ReviewDecision = %q", full.ReviewDecision)
 	}
-	if len(full.Labels) != 1 || full.Labels[0].Name != "bug" {
+	if len(full.Labels) != 1 || full.Labels[0].Name != labelBug {
 		t.Errorf("Labels = %v", full.Labels)
 	}
 

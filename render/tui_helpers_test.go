@@ -604,8 +604,8 @@ func TestHandleKeyDetailQuit(t *testing.T) {
 	m.phase = phaseDetail
 
 	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-	model := result.(tuiModel)
-	_ = model
+	got := result.(tuiModel)
+	_ = got
 	// cmd should be tea.Quit
 	if cmd == nil {
 		t.Error("q in detail should return a quit command")

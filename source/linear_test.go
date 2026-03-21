@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const labelBug = "bug"
+
 func TestParseDatePtr(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -141,7 +143,7 @@ func TestLinearResponseParsing(t *testing.T) {
 	if len(n.Labels.Nodes) != 2 {
 		t.Fatalf("Labels len = %d, want 2", len(n.Labels.Nodes))
 	}
-	if n.Labels.Nodes[0].Name != "bug" {
+	if n.Labels.Nodes[0].Name != labelBug {
 		t.Errorf("Labels[0] = %q", n.Labels.Nodes[0].Name)
 	}
 	if n.Cycle == nil {

@@ -150,7 +150,7 @@ func TestGraphqlPRToFull(t *testing.T) {
 		}
 
 		// Set up labels
-		g.Labels.Nodes = []ghLabel{{Name: "bug"}, {Name: "urgent"}}
+		g.Labels.Nodes = []ghLabel{{Name: labelBug}, {Name: "urgent"}}
 
 		full := graphqlPRToFull(g)
 
@@ -223,7 +223,7 @@ func TestGraphqlPRToFull(t *testing.T) {
 		if len(full.Labels) != 2 {
 			t.Fatalf("Labels len = %d, want 2", len(full.Labels))
 		}
-		if full.Labels[0].Name != "bug" {
+		if full.Labels[0].Name != labelBug {
 			t.Errorf("Labels[0].Name = %q, want bug", full.Labels[0].Name)
 		}
 		if full.Labels[1].Name != "urgent" {

@@ -386,13 +386,20 @@ func deriveCIStatus(checks []ciCheck) string {
 	return model.CIPending
 }
 
+// GitHub review decision strings.
+const (
+	ghReviewApproved         = "APPROVED"
+	ghReviewChangesRequested = "CHANGES_REQUESTED"
+	ghReviewRequired         = "REVIEW_REQUIRED"
+)
+
 func deriveReviewState(decision string) string {
 	switch decision {
-	case "APPROVED":
+	case ghReviewApproved:
 		return model.ReviewApproved
-	case "CHANGES_REQUESTED":
+	case ghReviewChangesRequested:
 		return model.ReviewChangesRequested
-	case "REVIEW_REQUIRED":
+	case ghReviewRequired:
 		return model.ReviewRequired
 	}
 	return ""
