@@ -275,11 +275,37 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSettingsKey(msg)
 	}
 
-	// Detail phase — any key goes back to list
+	// Detail phase — action keys work, esc goes back
 	if m.phase == phaseDetail {
+		item := m.items[m.cursor]
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case keyEsc:
+			m.phase = phaseReady
+			return m, nil
+		case keyEnter, "e":
+			if p := wtPath(item); p != "" {
+				m.action = Action{Kind: "editor", Path: p}
+				return m, tea.Quit
+			}
+			return m, nil
+		case "c":
+			if p := wtPath(item); p != "" {
+				m.action = Action{Kind: "claude", Path: p}
+				return m, tea.Quit
+			}
+			return m, nil
+		case "l":
+			if item.Issue != nil && item.Issue.URL != "" {
+				openBrowserFunc(item.Issue.URL)
+			}
+			return m, nil
+		case "g":
+			if item.PR != nil && item.PR.URL != "" {
+				openBrowserFunc(item.PR.URL)
+			}
+			return m, nil
 		default:
 			m.phase = phaseReady
 			return m, nil
@@ -769,11 +795,14 @@ func (m tuiModel) viewDetail() string {
 	item := m.items[m.cursor]
 	var b strings.Builder
 
-	// Item header
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorTitleBright)
 	idStyle := lipgloss.NewStyle().Bold(true).Foreground(colorIssueIDSel)
 	dimStyle := lipgloss.NewStyle().Foreground(colorStatus)
+	labelStyle := lipgloss.NewStyle().Foreground(colorStatus)
+	valStyle := lipgloss.NewStyle().Foreground(colorTitleBright)
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorHeader)
 
+	// Item header
 	if item.Issue != nil {
 		fmt.Fprintf(&b, "  %s  %s\n",
 			idStyle.Render(item.Issue.Identifier),
@@ -795,29 +824,187 @@ func (m tuiModel) viewDetail() string {
 		scoreColor = colorUrgLow
 	}
 	scoreStyle := lipgloss.NewStyle().Bold(true).Foreground(scoreColor)
-	fmt.Fprintf(&b, "  Score: %s\n\n", scoreStyle.Render(fmt.Sprintf("%d", item.Score)))
+	fmt.Fprintf(&b, "  Score: %s\n", scoreStyle.Render(fmt.Sprintf("%d", item.Score)))
 
-	// Breakdown
+	// ── Issue metadata ──
+	if issue := item.Issue; issue != nil {
+		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render("  Issue") + "\n")
+
+		row := func(label, value string) {
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", label)), valStyle.Render(value))
+		}
+
+		row("Status", issue.Status)
+		row("Priority", priorityLabel(issue.Priority))
+
+		if issue.DueDate != nil {
+			days := int(time.Until(*issue.DueDate).Hours() / 24)
+			var dueTxt string
+			switch {
+			case days < 0:
+				dueTxt = fmt.Sprintf("%s (overdue by %dd)", issue.DueDate.Format("Jan 2"), -days)
+			case days == 0:
+				dueTxt = issue.DueDate.Format("Jan 2") + " (today)"
+			default:
+				dueTxt = fmt.Sprintf("%s (%dd away)", issue.DueDate.Format("Jan 2"), days)
+			}
+			row("Due", dueTxt)
+		}
+
+		if issue.StartedAt != nil {
+			days := int(time.Since(*issue.StartedAt).Hours() / 24)
+			if days > 0 {
+				row("In progress", fmt.Sprintf("%dd", days))
+			} else {
+				row("In progress", "today")
+			}
+		}
+
+		if issue.Estimate != nil {
+			row("Estimate", fmt.Sprintf("%g pts", *issue.Estimate))
+		}
+
+		if issue.InCycle {
+			cycleTxt := "yes"
+			if issue.CycleEndDate != nil {
+				days := int(time.Until(*issue.CycleEndDate).Hours() / 24)
+				if days >= 0 {
+					cycleTxt = fmt.Sprintf("yes (%dd left)", days)
+				} else {
+					cycleTxt = "yes (ended)"
+				}
+			}
+			row("Cycle", cycleTxt)
+		}
+
+		if len(issue.Labels) > 0 {
+			row("Labels", strings.Join(issue.Labels, ", "))
+		}
+	}
+
+	// ── PR metadata ──
+	if pr := item.PR; pr != nil {
+		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render("  Pull Request") + "\n")
+
+		row := func(label, value string) {
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", label)), valStyle.Render(value))
+		}
+
+		repoLabel := fmt.Sprintf("#%d", pr.Number)
+		if pr.Repo != "" {
+			repoLabel = fmt.Sprintf("%s #%d", pr.Repo, pr.Number)
+		}
+		if pr.IsDraft {
+			repoLabel += " (draft)"
+		}
+		row("PR", repoLabel)
+
+		// CI status
+		switch pr.CIStatus {
+		case model.CIPassing:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "CI")),
+				lipgloss.NewStyle().Foreground(colorPass).Render("✓ passing"))
+		case model.CIFailing:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "CI")),
+				lipgloss.NewStyle().Foreground(colorFail).Render("✗ failing"))
+		case model.CIPending:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "CI")),
+				lipgloss.NewStyle().Foreground(colorPending).Render("◎ pending"))
+		}
+
+		// Review state
+		switch pr.ReviewState {
+		case model.ReviewApproved:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Review")),
+				lipgloss.NewStyle().Foreground(colorPass).Render("✓ approved"))
+		case model.ReviewChangesRequested:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Review")),
+				lipgloss.NewStyle().Foreground(colorFail).Render("⚠ changes requested"))
+		case model.ReviewRequired:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Review")),
+				lipgloss.NewStyle().Foreground(colorPending).Render("◎ review needed"))
+		}
+
+		// Diff stats
+		if pr.Additions > 0 || pr.Deletions > 0 {
+			diffTxt := fmt.Sprintf("+%d -%d across %d files", pr.Additions, pr.Deletions, pr.ChangedFiles)
+			row("Changes", diffTxt)
+		}
+
+		// Merge state
+		switch pr.Mergeable {
+		case model.MergeableConflicting:
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Merge")),
+				lipgloss.NewStyle().Foreground(colorFail).Render("conflicts"))
+		case model.MergeableMergeable:
+			if pr.MergeStateStatus == model.MergeStateClean {
+				fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Merge")),
+					lipgloss.NewStyle().Foreground(colorPass).Render("ready"))
+			} else if pr.MergeStateStatus == model.MergeStateBlocked {
+				fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", "Merge")),
+					lipgloss.NewStyle().Foreground(colorPending).Render("blocked"))
+			}
+		}
+
+		if pr.Comments > 0 {
+			row("Comments", fmt.Sprintf("%d", pr.Comments))
+		}
+		if pr.ReviewRequests > 0 {
+			row("Reviewers", fmt.Sprintf("%d pending", pr.ReviewRequests))
+		}
+		if len(pr.Labels) > 0 {
+			row("Labels", strings.Join(pr.Labels, ", "))
+		}
+	}
+
+	// ── Worktree metadata ──
+	if wt := item.Worktree; wt != nil && !wt.IsMain {
+		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render("  Worktree") + "\n")
+
+		row := func(label, value string) {
+			fmt.Fprintf(&b, "  %s %s\n", labelStyle.Render(fmt.Sprintf("%-12s", label)), valStyle.Render(value))
+		}
+
+		row("Branch", wt.Branch)
+		row("Path", shortenPath(wt.Path))
+		if !wt.LastCommit.IsZero() {
+			row("Last commit", humanDuration(time.Since(wt.LastCommit)))
+		}
+	}
+
+	// ── Score breakdown ──
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render("  Score Breakdown") + "\n")
 	if len(item.Breakdown) == 0 {
 		b.WriteString(dimStyle.Render("  No scoring factors — base score 0") + "\n")
 	} else {
 		renderBreakdown(&b, item.Breakdown)
 	}
 
-	// Warnings (if any)
-	if len(m.warnings) > 0 {
-		warnStyle := lipgloss.NewStyle().Foreground(colorWarn)
-		b.WriteString("\n")
-		b.WriteString(warnStyle.Render(fmt.Sprintf("  Warnings (%d)", len(m.warnings))) + "\n")
-		for _, w := range m.warnings {
-			b.WriteString("  " + warnStyle.Render("⚠ ") + dimStyle.Render(w) + "\n")
-		}
-	}
-
-	// Hint
+	// ── Footer with action keys ──
 	b.WriteString("\n")
+	keyStyle := lipgloss.NewStyle().Foreground(colorHelpKey)
 	hintStyle := lipgloss.NewStyle().Foreground(colorHelpLabel)
-	b.WriteString(hintStyle.Render("  Press any key to go back") + "\n")
+
+	var keys []string
+	if item.Worktree != nil && !item.Worktree.IsMain {
+		keys = append(keys,
+			keyStyle.Render("enter")+hintStyle.Render(" "+m.editor),
+			keyStyle.Render("c")+hintStyle.Render(" claude"),
+		)
+	}
+	if item.Issue != nil && item.Issue.URL != "" {
+		keys = append(keys, keyStyle.Render("l")+hintStyle.Render(" linear"))
+	}
+	if item.PR != nil && item.PR.URL != "" {
+		keys = append(keys, keyStyle.Render("g")+hintStyle.Render(" github"))
+	}
+	keys = append(keys, keyStyle.Render("esc")+hintStyle.Render(" back"))
+
+	b.WriteString("  " + strings.Join(keys, "  ") + "\n")
 
 	return b.String()
 }
@@ -863,6 +1050,21 @@ func renderBreakdown(b *strings.Builder, factors []model.ScoreFactor) {
 			line += detailStyle.Render(f.Detail)
 		}
 		b.WriteString(line + "\n")
+	}
+}
+
+func priorityLabel(p int) string {
+	switch p {
+	case 1:
+		return "Urgent"
+	case 2:
+		return "High"
+	case 3:
+		return "Medium"
+	case 4:
+		return "Low"
+	default:
+		return "None"
 	}
 }
 

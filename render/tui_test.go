@@ -380,30 +380,16 @@ func TestWarningsQuitFromView(t *testing.T) {
 	}
 }
 
-func TestDetailViewShowsWarnings(t *testing.T) {
+func TestDetailViewNoWarningsSection(t *testing.T) {
+	// Warnings are shown in the dedicated warnings view (w key), not in detail view
 	items := sampleItems()
 	m := testModel(items)
 	m.phase = phaseDetail
 	m.warnings = []string{"github authored: 403 forbidden"}
 
 	view := m.View()
-	if !strings.Contains(view, "403 forbidden") {
-		t.Error("detail view should show warning text")
-	}
-	if !strings.Contains(view, "Warnings") {
-		t.Error("detail view should show 'Warnings' header")
-	}
-}
-
-func TestDetailViewNoWarningsSection(t *testing.T) {
-	items := sampleItems()
-	m := testModel(items)
-	m.phase = phaseDetail
-	// No warnings
-
-	view := m.View()
-	if strings.Contains(view, "Warnings") {
-		t.Error("detail view should not show warnings section when there are none")
+	if strings.Contains(view, "403 forbidden") {
+		t.Error("detail view should not show warnings (use w key for warnings view)")
 	}
 }
 

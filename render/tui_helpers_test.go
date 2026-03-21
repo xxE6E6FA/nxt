@@ -341,6 +341,163 @@ func TestViewDetailWithBreakdown(t *testing.T) {
 	}
 }
 
+func TestViewDetailShowsIssueMetadata(t *testing.T) {
+	due := time.Now().Add(3 * 24 * time.Hour)
+	started := time.Now().Add(-5 * 24 * time.Hour)
+	est := 3.0
+	cycleEnd := time.Now().Add(7 * 24 * time.Hour)
+	items := []model.WorkItem{{
+		Issue: &model.LinearIssue{
+			Identifier:   "ENG-42",
+			Title:        "Enrich detail",
+			Status:       "In Progress",
+			Priority:     2,
+			DueDate:      &due,
+			StartedAt:    &started,
+			Estimate:     &est,
+			InCycle:      true,
+			CycleEndDate: &cycleEnd,
+			Labels:       []string{"frontend", "ux"},
+		},
+		Score: 25,
+	}}
+	m := testModel(items)
+	m.phase = phaseDetail
+	view := m.View()
+
+	for _, want := range []string{"Issue", "In Progress", "High", "away", "5d", "3 pts", "frontend", "ux"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail view should contain %q", want)
+		}
+	}
+}
+
+func TestViewDetailShowsPRMetadata(t *testing.T) {
+	items := []model.WorkItem{{
+		Issue: &model.LinearIssue{Identifier: "ENG-1", Title: "Test"},
+		PR: &model.PullRequest{
+			Number:       99,
+			Repo:         "org/repo",
+			URL:          "https://github.com/org/repo/pull/99",
+			CIStatus:     model.CIFailing,
+			ReviewState:  model.ReviewChangesRequested,
+			Additions:    142,
+			Deletions:    38,
+			ChangedFiles: 4,
+			Mergeable:    model.MergeableConflicting,
+			Comments:     3,
+			Labels:       []string{"bug"},
+		},
+		Score: 40,
+	}}
+	m := testModel(items)
+	m.phase = phaseDetail
+	view := m.View()
+
+	for _, want := range []string{"Pull Request", "org/repo #99", "failing", "changes requested", "+142 -38 across 4 files", "conflicts", "bug"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail view should contain %q", want)
+		}
+	}
+}
+
+func TestViewDetailShowsWorktree(t *testing.T) {
+	items := []model.WorkItem{{
+		Issue: &model.LinearIssue{Identifier: "ENG-1", Title: "Test"},
+		Worktree: &model.Worktree{
+			Path:       "/Users/test/code/repo/worktrees/feature-x",
+			Branch:     "feature-x",
+			LastCommit: time.Now().Add(-2 * time.Hour),
+		},
+		Score: 10,
+	}}
+	m := testModel(items)
+	m.phase = phaseDetail
+	view := m.View()
+
+	for _, want := range []string{"Worktree", "feature-x", "2h ago"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail view should contain %q", want)
+		}
+	}
+}
+
+func TestViewDetailShowsActionKeys(t *testing.T) {
+	items := []model.WorkItem{{
+		Issue: &model.LinearIssue{
+			Identifier: "ENG-1",
+			Title:      "Test",
+			URL:        "https://linear.app/test/ENG-1",
+		},
+		PR: &model.PullRequest{
+			Number: 1,
+			URL:    "https://github.com/org/repo/pull/1",
+		},
+		Worktree: &model.Worktree{
+			Path:   "/tmp/wt",
+			Branch: "feat",
+		},
+		Score: 10,
+	}}
+	m := testModel(items)
+	m.phase = phaseDetail
+	view := m.View()
+
+	for _, want := range []string{"linear", "github", "back"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail footer should contain %q", want)
+		}
+	}
+}
+
+func TestDetailKeyEscGoesBack(t *testing.T) {
+	m := testModel(sampleItems())
+	m.phase = phaseDetail
+	m = updateModel(m, specialKey(tea.KeyEsc))
+	if m.phase != phaseReady {
+		t.Errorf("esc in detail should go back to list, got phase %d", m.phase)
+	}
+}
+
+func TestDetailKeyLOpensLinear(t *testing.T) {
+	var opened string
+	origOpen := openBrowserFunc
+	openBrowserFunc = func(url string) { opened = url }
+	defer func() { openBrowserFunc = origOpen }()
+
+	m := testModel(sampleItems())
+	m.phase = phaseDetail
+	m.cursor = 0 // DISCO-1 has a URL
+	m = updateModel(m, keyMsg("l"))
+
+	if opened != "https://linear.app/disco/issue/DISCO-1" {
+		t.Errorf("l key should open Linear URL, opened: %q", opened)
+	}
+	// Should stay in detail view
+	if m.phase != phaseDetail {
+		t.Error("l key should stay in detail view")
+	}
+}
+
+func TestDetailKeyGOpensGitHub(t *testing.T) {
+	var opened string
+	origOpen := openBrowserFunc
+	openBrowserFunc = func(url string) { opened = url }
+	defer func() { openBrowserFunc = origOpen }()
+
+	m := testModel(sampleItems())
+	m.phase = phaseDetail
+	m.cursor = 1 // DISCO-2 has a PR
+	m = updateModel(m, keyMsg("g"))
+
+	if opened != "https://github.com/org/repo/pull/42" {
+		t.Errorf("g key should open GitHub URL, opened: %q", opened)
+	}
+	if m.phase != phaseDetail {
+		t.Error("g key should stay in detail view")
+	}
+}
+
 func TestViewWidthZero(t *testing.T) {
 	m := testModel(sampleItems())
 	m.width = 0
