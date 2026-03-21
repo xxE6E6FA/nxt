@@ -498,6 +498,41 @@ func TestDetailKeyGOpensGitHub(t *testing.T) {
 	}
 }
 
+func TestRefreshFlashAfterManualRefresh(t *testing.T) {
+	m := testModel(sampleItems())
+	m.refreshFlashAt = time.Now()
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "✓ refreshed") {
+		t.Error("status bar should show '✓ refreshed' flash after manual refresh")
+	}
+}
+
+func TestRefreshFlashExpiresAfterTwoSeconds(t *testing.T) {
+	m := testModel(sampleItems())
+	m.refreshFlashAt = time.Now().Add(-3 * time.Second)
+	m.fetchedAt = time.Now().Add(-3 * time.Second)
+	bar := m.renderStatusBar()
+	if strings.Contains(bar, "✓ refreshed") {
+		t.Error("refresh flash should expire after 2 seconds")
+	}
+	if !strings.Contains(bar, "updated") {
+		t.Error("status bar should fall back to 'updated' after flash expires")
+	}
+}
+
+func TestManualRefreshSetsFlash(t *testing.T) {
+	m := testModel(sampleItems())
+
+	// Press r to trigger manual refresh
+	m = updateModel(m, keyMsg("r"))
+	if !m.manualRefresh {
+		t.Error("pressing r should set manualRefresh")
+	}
+	if !m.refreshing {
+		t.Error("pressing r should set refreshing")
+	}
+}
+
 func TestViewWidthZero(t *testing.T) {
 	m := testModel(sampleItems())
 	m.width = 0

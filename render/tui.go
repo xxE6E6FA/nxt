@@ -59,16 +59,18 @@ const (
 )
 
 type tuiModel struct {
-	phase      phase
-	items      []model.WorkItem
-	cursor     int
-	width      int
-	height     int
-	action     Action
-	lastAction Action // records the most recent action decided by handleKey (for testability)
-	warnings   []string
-	fetchedAt  time.Time
-	refreshing bool // true while a background refresh is in progress
+	phase          phase
+	items          []model.WorkItem
+	cursor         int
+	width          int
+	height         int
+	action         Action
+	lastAction     Action // records the most recent action decided by handleKey (for testability)
+	warnings       []string
+	fetchedAt      time.Time
+	refreshing     bool      // true while a background refresh is in progress
+	manualRefresh  bool      // true when the current refresh was triggered by the user
+	refreshFlashAt time.Time // when the last manual refresh completed (for "✓ refreshed" flash)
 
 	// Config
 	editor          string // command to open folders
@@ -239,6 +241,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.warnings = msg.Warnings
 		m.fetchedAt = time.Now()
 		m.refreshing = false
+		if m.manualRefresh {
+			m.refreshFlashAt = time.Now()
+			m.manualRefresh = false
+		}
 		// Clamp cursor if items shrunk (e.g. after refresh)
 		if m.cursor >= len(m.items) && len(m.items) > 0 {
 			m.cursor = len(m.items) - 1
@@ -332,6 +338,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Refresh and warnings work even with empty items
 	if msg.String() == "r" && m.phase == phaseReady {
+		m.manualRefresh = true
 		return m.triggerRefresh()
 	}
 	if msg.String() == "w" && m.phase == phaseReady && len(m.warnings) > 0 {
@@ -766,6 +773,9 @@ func (m tuiModel) renderStatusBar() string {
 	if m.refreshing {
 		spinStyle := lipgloss.NewStyle().Foreground(colorSpinner)
 		left = append(left, spinStyle.Render(spinFrames[m.spinFrame]+" refreshing"))
+	} else if !m.refreshFlashAt.IsZero() && time.Since(m.refreshFlashAt) < 2*time.Second {
+		checkStyle := lipgloss.NewStyle().Foreground(colorCheckmark)
+		left = append(left, checkStyle.Render("✓ refreshed"))
 	} else if !m.fetchedAt.IsZero() {
 		left = append(left, dim.Render("updated "+humanDuration(time.Since(m.fetchedAt))))
 	}
