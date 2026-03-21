@@ -77,6 +77,14 @@ Label scoring is opt-in — assign Linear/GitHub labels to urgency buckets via t
 
 ## Development
 
+This project uses [mise](https://mise.jdx.dev) to manage tool versions. Install mise, then:
+
+```bash
+mise install         # install Go and golangci-lint at pinned versions
+```
+
+Pre-commit hooks run via [lefthook](https://github.com/evilmartians/lefthook) — `golangci-lint` and `go test -short` run automatically on each commit.
+
 ```bash
 make test            # run tests with race detector
 make lint            # golangci-lint
